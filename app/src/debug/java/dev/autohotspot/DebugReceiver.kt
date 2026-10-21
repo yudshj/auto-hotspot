@@ -21,11 +21,16 @@ class DebugReceiver : BroadcastReceiver() {
                     "tmstop" -> HotspotController.stopViaTetheringManager(context)
                     "enable" -> { Prefs.setEnabled(context, true); WifiMonitor.sync(context); "enabled" }
                     "disable" -> { Prefs.setEnabled(context, false); WifiMonitor.sync(context); "disabled" }
+                    "autoon" -> {
+                        Prefs.setAutoOn(context, intent.getBooleanExtra("v", true)); WifiMonitor.sync(context)
+                        "autoOn=${Prefs.isAutoOn(context)}"
+                    }
                     else -> ""
                 } + " | hotspot=${HotspotController.isHotspotEnabled(context)}" +
                     " shizukuRunning=${HotspotController.shizukuRunning()}" +
                     " shizukuGranted=${HotspotController.shizukuGranted()}" +
-                    " writeSettings=${HotspotController.canWriteSettings(context)}"
+                    " writeSettings=${HotspotController.canWriteSettings(context)}" +
+                    " restrictBg=${context.getSystemService(android.net.ConnectivityManager::class.java).restrictBackgroundStatus}"
             } catch (t: Throwable) {
                 Log.e(TAG, "debug failed", t); "ERROR ${t}"
             }

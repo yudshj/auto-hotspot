@@ -1,7 +1,15 @@
 package dev.autohotspot
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiInfo
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -21,6 +29,7 @@ import dev.autohotspot.ui.MainActions
 import dev.autohotspot.ui.MainScreen
 import dev.autohotspot.ui.MainUiState
 import rikka.shizuku.Shizuku
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
@@ -33,6 +42,49 @@ class MainActivity : ComponentActivity() {
     private val binderListener = Shizuku.OnBinderReceivedListener { refresh() }
     private val binderDeadListener = Shizuku.OnBinderDeadListener { refresh() }
 
+    /**
+     * 界面可见时实时跟踪 Wi-Fi 连接（含 SSID），网络或热点状态一变就刷新。
+     * 断开时 WifiManager.connectionInfo 可能还短暂残留旧 SSID，所以以回调为准。
+     */
+    private val liveWifi = ConcurrentHashMap<Network, String>()
+    @Volatile private var liveTracking = false
+
+    private val wifiCallback = object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            val ssid = normalizeSsid((caps.transportInfo as? WifiInfo)?.ssid) ?: ""
+            if (liveWifi.put(network, ssid) != ssid) runOnUiThread { refresh() }
+        }
+
+        override fun onLost(network: Network) {
+            liveWifi.remove(network)
+            runOnUiThread { refresh() }
+        }
+    }
+
+    private val apReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = refresh()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        liveWifi.clear()
+        getSystemService(ConnectivityManager::class.java).registerNetworkCallback(
+            NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(),
+            wifiCallback
+        )
+        liveTracking = true
+        registerReceiver(
+            apReceiver, IntentFilter(HotspotController.ACTION_WIFI_AP_STATE_CHANGED), RECEIVER_EXPORTED
+        )
+    }
+
+    override fun onStop() {
+        liveTracking = false
+        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(wifiCallback) }
+        runCatching { unregisterReceiver(apReceiver) }
+        super.onStop()
+    }
+
     private val permLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh() }
 
@@ -44,7 +96,7 @@ class MainActivity : ComponentActivity() {
         Shizuku.addBinderReceivedListenerSticky(binderListener)
         Shizuku.addBinderDeadListener(binderDeadListener)
         // 打开界面时重新注册一次监听（幂等），防止注册因某些原因丢失
-        if (Prefs.isEnabled(this)) WifiMonitor.sync(this)
+        if (Prefs.isEnabled(this) || Prefs.isAutoOn(this)) WifiMonitor.sync(this)
         setContent {
             AutoHotspotTheme {
                 Screen(tick) // tick 变化触发重组，重新读取权限/偏好状态
@@ -68,12 +120,21 @@ class MainActivity : ComponentActivity() {
     private fun granted(p: String) = checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
 
     private fun currentSsid(): String? {
+        if (liveTracking) {
+            // 回调说没有 Wi-Fi 就是没连；有 Wi-Fi 但 SSID 读不到（权限）时退回 WifiManager
+            if (liveWifi.isEmpty()) return null
+            liveWifi.values.firstOrNull { it.isNotEmpty() }?.let { return it }
+        }
         return WifiMonitor.currentSsid(this)
     }
 
     private val actions = MainActions(
         setEnabled = {
             Prefs.setEnabled(this, it)
+            WifiMonitor.sync(this)
+        },
+        setAutoOn = {
+            Prefs.setAutoOn(this, it)
             WifiMonitor.sync(this)
         },
         addSsid = { Prefs.addSsid(this, it) },
@@ -87,6 +148,9 @@ class MainActivity : ComponentActivity() {
         requestBackgroundLocation = {
             if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) toast("请先授予精确位置")
             else permLauncher.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+        },
+        openAppSettings = {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         },
         requestNotifications = {
             permLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
@@ -117,11 +181,14 @@ class MainActivity : ComponentActivity() {
         val fine = granted(Manifest.permission.ACCESS_FINE_LOCATION)
         val state = MainUiState(
             enabled = Prefs.isEnabled(this),
+            autoOn = Prefs.isAutoOn(this),
             ssids = Prefs.ssids(this).sorted(),
             current = if (fine) currentSsid() else null,
             fineLocation = fine,
             backgroundLocation = granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
             notifications = granted(Manifest.permission.POST_NOTIFICATIONS),
+            backgroundData = getSystemService(ConnectivityManager::class.java).restrictBackgroundStatus !=
+                ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED,
             writeSettings = HotspotController.canWriteSettings(this),
             shizukuRunning = HotspotController.shizukuRunning(),
             shizukuGranted = HotspotController.shizukuGranted(),

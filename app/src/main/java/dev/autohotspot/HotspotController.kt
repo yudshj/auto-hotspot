@@ -114,6 +114,20 @@ object HotspotController {
         throw IllegalStateException(errors.joinToString("; "))
     }
 
+    /** 通过 Shizuku 打开热点并确认已开启；失败时抛出异常 */
+    fun startHotspot(c: Context): String {
+        ensureHiddenApiAccess()
+        if (!shizukuGranted()) error("Shizuku 未运行或未授权")
+        val code = startViaShizuku()
+        if (code != null && code != 0) error("startTethering 返回错误码 $code")
+        val deadline = System.currentTimeMillis() + 8000
+        while (System.currentTimeMillis() < deadline) {
+            if (isHotspotEnabled(c)) return "已通过 Shizuku 打开热点"
+            Thread.sleep(200)
+        }
+        error("已发送打开请求，但热点未开启")
+    }
+
     private fun waitUntilOff(c: Context, timeoutMs: Long = 3000): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {

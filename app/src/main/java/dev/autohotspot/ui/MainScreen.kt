@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.Wifi
@@ -94,11 +95,14 @@ import kotlinx.coroutines.launch
 @Immutable
 data class MainUiState(
     val enabled: Boolean,
+    val autoOn: Boolean,
     val ssids: List<String>,
     val current: String?,
     val fineLocation: Boolean,
     val backgroundLocation: Boolean,
     val notifications: Boolean,
+    /** 未被「后台数据」/ 数据节省程序限制。被限制时熄屏后检测不到 Wi-Fi 断开 */
+    val backgroundData: Boolean,
     val writeSettings: Boolean,
     val shizukuRunning: Boolean,
     val shizukuGranted: Boolean,
@@ -106,18 +110,20 @@ data class MainUiState(
     val log: List<String>,
 ) {
     val anyStopMethod get() = shizukuGranted || writeSettings
-    val basicMissing get() = listOf(fineLocation, backgroundLocation, notifications).count { !it }
+    val basicMissing get() = listOf(fineLocation, backgroundLocation, notifications, backgroundData || !autoOn).count { !it }
     val needsAttention get() = basicMissing > 0 || !anyStopMethod
     val currentInList get() = current != null && current in ssids
 }
 
 class MainActions(
     val setEnabled: (Boolean) -> Unit,
+    val setAutoOn: (Boolean) -> Unit,
     val addSsid: (String) -> Unit,
     val removeSsid: (String) -> Unit,
     val requestLocation: () -> Unit,
     val requestBackgroundLocation: () -> Unit,
     val requestNotifications: () -> Unit,
+    val openAppSettings: () -> Unit,
     val requestShizuku: () -> Unit,
     val requestWriteSettings: () -> Unit,
     val testStopHotspot: () -> Unit,
@@ -125,8 +131,8 @@ class MainActions(
 )
 
 // LazyColumn 中各项的固定索引（用于提示卡片跳转）
-private const val INDEX_PERMISSIONS = 3
-private const val INDEX_METHODS = 4
+private const val INDEX_PERMISSIONS = 4
+private const val INDEX_METHODS = 5
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -167,7 +173,7 @@ fun MainScreen(state: MainUiState, actions: MainActions) {
                 item(key = "banner") {
                     AttentionBanner(state, Modifier.animateItem()) {
                         scope.launch {
-                            // 横幅存在时：hero=0, banner=1, wifi=2, perms=3, methods=4
+                            // 横幅存在时：hero=0, banner=1, rules=2, wifi=3, perms=4, methods=5
                             listState.animateScrollToItem(
                                 if (state.basicMissing > 0) INDEX_PERMISSIONS else INDEX_METHODS
                             )
@@ -175,6 +181,7 @@ fun MainScreen(state: MainUiState, actions: MainActions) {
                     }
                 }
             }
+            item(key = "rules") { RulesSection(state, actions) }
             item(key = "wifi") { WifiListSection(state, actions) }
             item(key = "perms") { PermissionsSection(state, actions) }
             item(key = "methods") { MethodsSection(state, actions) }
@@ -393,6 +400,30 @@ private fun CardDivider() {
     )
 }
 
+// ───────────────────────────── 规则 ─────────────────────────────
+
+@Composable
+private fun RulesSection(state: MainUiState, actions: MainActions) {
+    Section("规则") {
+        SectionCard {
+            ListItem(
+                modifier = Modifier.toggleable(
+                    value = state.autoOn,
+                    role = Role.Switch,
+                    onValueChange = actions.setAutoOn,
+                ),
+                leadingContent = { Icon(Icons.Rounded.SignalCellularAlt, contentDescription = null) },
+                headlineContent = { Text("断开 Wi-Fi 后自动打开热点") },
+                supportingContent = {
+                    Text("从 Wi-Fi 切换到移动数据时打开热点；在流量下手动关掉热点不会被再次打开")
+                },
+                trailingContent = { Switch(checked = state.autoOn, onCheckedChange = null) },
+                colors = transparentListItemColors(),
+            )
+        }
+    }
+}
+
 // ───────────────────────────── Wi-Fi 列表 ─────────────────────────────
 
 @Composable
@@ -590,6 +621,21 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions) {
                 description = "无法自动关闭热点时（如 Shizuku 未运行）提醒你",
                 status = if (state.notifications) PermStatus.Granted else PermStatus.Missing,
                 onGrant = actions.requestNotifications,
+            )
+            CardDivider()
+            PermissionItem(
+                title = "后台数据",
+                description = when {
+                    state.backgroundData -> "允许后台使用移动数据，熄屏时也能检测到 Wi-Fi 断开"
+                    else -> "已被限制：熄屏后检测不到 Wi-Fi 断开。请在 应用信息 → 移动数据和 WLAN 中开启「后台数据」" +
+                        "（若开着数据节省程序，还需开启「不受数据流量限制」）"
+                },
+                status = when {
+                    state.backgroundData -> PermStatus.Granted
+                    !state.autoOn -> PermStatus.Optional
+                    else -> PermStatus.Missing
+                },
+                onGrant = actions.openAppSettings,
             )
         }
     }

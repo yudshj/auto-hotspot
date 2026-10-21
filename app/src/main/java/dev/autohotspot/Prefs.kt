@@ -10,6 +10,7 @@ object Prefs {
     private const val NAME = "auto_hotspot"
     const val KEY_ENABLED = "enabled"
     const val KEY_SSIDS = "ssids"
+    const val KEY_AUTO_ON = "auto_on"
     const val KEY_LOG = "log"
     private const val MAX_LOG = 100
 
@@ -18,6 +19,10 @@ object Prefs {
 
     fun isEnabled(c: Context) = sp(c).getBoolean(KEY_ENABLED, false)
     fun setEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_ENABLED, v).apply()
+
+    /** 断开 Wi-Fi、改用移动数据时自动打开热点 */
+    fun isAutoOn(c: Context) = sp(c).getBoolean(KEY_AUTO_ON, false)
+    fun setAutoOn(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_AUTO_ON, v).apply()
 
     fun ssids(c: Context): Set<String> = sp(c).getStringSet(KEY_SSIDS, emptySet())!!.toSet()
 
