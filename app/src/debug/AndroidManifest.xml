@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <!-- 仅 debug 构建：adb shell am broadcast -n dev.autohotspot/.DebugReceiver -a stop|start|state -->
-        <receiver android:name=".DebugReceiver" android:exported="true" />
+        <!-- 限定 DUMP 权限：只有 adb shell 能发，其他应用不能借此开关热点 -->
+        <receiver
+            android:name=".DebugReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
     </application>
 </manifest>

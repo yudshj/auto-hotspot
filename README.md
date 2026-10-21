@@ -1,6 +1,8 @@
 # 热点自动关 (Auto Hotspot Off)
 
-连接到指定 Wi-Fi 时自动关闭手机热点。
+Android 应用：连接到指定 Wi-Fi 时自动关闭手机热点；断开 Wi-Fi、改用移动数据时自动打开热点。
+
+要求：Android 12+（在 Android 17 上测试），已安装并运行 [Shizuku](https://shizuku.rikka.app/)。
 
 功能：
 - 连接到列表中的 Wi-Fi 时关闭热点
@@ -17,7 +19,8 @@
 
 ## 构建 / 安装
 ```bash
-JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew :app:assembleDebug
+# 需要 JDK 17 和 Android SDK（compileSdk 36）
+./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 # 可选：用 adb 直接授权（也可以在界面里点「授予」）
 adb shell pm grant dev.autohotspot android.permission.ACCESS_FINE_LOCATION
