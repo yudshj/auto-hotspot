@@ -34,7 +34,8 @@ import kotlin.concurrent.thread
  *    FOREGROUND，也无法用「蜂窝变前台」判断。）
  *
  * 两者接力：Wi-Fi 连上 → 处理 + 安排「等移动数据」任务；任务运行（Wi-Fi 已断）→ 处理 + 重新注册 Wi-Fi 监听。
- * 另有一个 15 分钟的周期任务兜底（例如 Wi-Fi 断开时没有移动网络，蜂窝任务就不会运行）。
+ * 另有一个 15 分钟的周期任务兜底（例如 Wi-Fi 断开时没有移动网络，蜂窝任务就不会运行），
+ * 发现有没处理的断开时会补做一次断开处理。
  *
  * 不用常驻前台服务的原因：Shizuku 服务端只在应用 uid「启动/从缓存恢复」时推送 binder，
  * 常驻前台服务会让 uid 一直处于活跃状态，Shizuku 晚于本应用启动（如开机）时就永远收不到 binder。
@@ -45,6 +46,7 @@ object WifiMonitor {
     private const val KEY_LAST_SSID = "last_ssid"
     const val JOB_WAIT_CELLULAR = 1
     const val JOB_PERIODIC = 2
+    private val disconnectLock = Any()
 
     fun isActive(c: Context) = Prefs.isEnabled(c) || Prefs.isAutoOn(c)
 
@@ -100,18 +102,18 @@ object WifiMonitor {
         if (ok != JobScheduler.RESULT_SUCCESS) js.schedule(builder.setExpedited(false).build())
     }
 
-    private fun wifiConnected(c: Context): Boolean {
+    private fun snapshot(c: Context): DisconnectPolicy.Snapshot {
         val cm = c.getSystemService(ConnectivityManager::class.java)
         @Suppress("DEPRECATION")
-        return cm.allNetworks.any {
+        val hasWifi = cm.allNetworks.any {
             cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        } || currentSsid(c) != null
-    }
-
-    private fun defaultIsCellular(c: Context): Boolean {
-        val cm = c.getSystemService(ConnectivityManager::class.java)
-        val caps = cm.getNetworkCapabilities(cm.activeNetwork ?: return false) ?: return false
-        return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        }
+        val defaultCaps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+        return DisconnectPolicy.Snapshot(
+            hasWifiNetwork = hasWifi,
+            defaultIsCellular = defaultCaps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true,
+            ssid = currentSsid(c),
+        )
     }
 
     private fun secs(t0: Long) = "%.1f".format((System.currentTimeMillis() - t0) / 1000.0)
@@ -177,27 +179,43 @@ object WifiMonitor {
     fun onCellularDefault(c: Context) {
         val ctx = c.applicationContext
         try {
-            val sp = Prefs.sp(ctx)
-            // 「?」表示连着 Wi-Fi 但读不到名称（如没有位置权限）
-            val last = sp.getString(KEY_LAST_SSID, null)?.let { if (it == "?") "Wi-Fi" else it } ?: return
-            // 防抖：Wi-Fi 漫游/短暂掉线时不动作
-            Thread.sleep(5000)
-            if (wifiConnected(ctx) || !defaultIsCellular(ctx)) return
-            sp.edit().remove(KEY_LAST_SSID).apply()
-            Prefs.appendLog(ctx, "已断开 Wi-Fi：$last，改用移动数据")
-            if (!Prefs.isAutoOn(ctx) || HotspotController.isHotspotEnabled(ctx)) return
-            Notifier.progress(ctx, "正在打开热点…", "已断开「$last」，改用移动数据")
-            waitForShizuku()
-            val t0 = System.currentTimeMillis()
-            try {
-                val msg = HotspotController.startHotspot(ctx)
-                Prefs.appendLog(ctx, "[改用移动数据] → $msg")
-                Notifier.done(ctx, "热点已开启", "已断开「$last」，改用移动数据 · 用时 ${secs(t0)} 秒")
-                ctx.getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIF_ID)
-            } catch (t: Throwable) {
-                Notifier.clear(ctx)
-                Prefs.appendLog(ctx, "[改用移动数据] → 打开热点失败：${t.message}")
-                notifyFailure(ctx, "已断开 $last，但无法自动打开热点", t.message ?: t.toString())
+            // 「等移动数据」任务和周期兜底可能同时进来：串行处理，后进来的会发现断开已处理过
+            synchronized(disconnectLock) {
+                val sp = Prefs.sp(ctx)
+                // 「?」表示连着 Wi-Fi 但读不到名称（如没有位置权限）
+                val last = sp.getString(KEY_LAST_SSID, null)?.let { if (it == "?") "Wi-Fi" else it } ?: return
+                // 防抖：Wi-Fi 漫游/短暂掉线时不动作
+                Thread.sleep(5000)
+                val s = snapshot(ctx)
+                when (DisconnectPolicy.afterDebounce(s)) {
+                    DisconnectPolicy.Debounce.WIFI_BACK -> {
+                        Prefs.appendLog(ctx, "Wi-Fi 短暂断开后已恢复（$last），不动作")
+                        return
+                    }
+                    DisconnectPolicy.Debounce.NOT_CELLULAR -> {
+                        // 保留 last：之后默认网络变成移动数据时由周期兜底补处理
+                        Prefs.appendLog(ctx, "已断开 Wi-Fi：$last，但默认网络不是移动数据，稍后再检查")
+                        return
+                    }
+                    DisconnectPolicy.Debounce.HANDLE -> {}
+                }
+                sp.edit().remove(KEY_LAST_SSID).apply()
+                val retrying = s.ssid?.let { "（系统仍在尝试连接 $it）" } ?: ""
+                Prefs.appendLog(ctx, "已断开 Wi-Fi：$last，改用移动数据$retrying")
+                if (!Prefs.isAutoOn(ctx) || HotspotController.isHotspotEnabled(ctx)) return
+                Notifier.progress(ctx, "正在打开热点…", "已断开「$last」，改用移动数据")
+                waitForShizuku()
+                val t0 = System.currentTimeMillis()
+                try {
+                    val msg = HotspotController.startHotspot(ctx)
+                    Prefs.appendLog(ctx, "[改用移动数据] → $msg")
+                    Notifier.done(ctx, "热点已开启", "已断开「$last」，改用移动数据 · 用时 ${secs(t0)} 秒")
+                    ctx.getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIF_ID)
+                } catch (t: Throwable) {
+                    Notifier.clear(ctx)
+                    Prefs.appendLog(ctx, "[改用移动数据] → 打开热点失败：${t.message}")
+                    notifyFailure(ctx, "已断开 $last，但无法自动打开热点", t.message ?: t.toString())
+                }
             }
         } finally {
             // 若 Wi-Fi 在防抖期间又连上了，注册时系统会立即投递，流程照常继续
@@ -205,11 +223,22 @@ object WifiMonitor {
         }
     }
 
-    /** 周期兜底：没连 Wi-Fi 就确保 Wi-Fi 监听在；连着就确保「等移动数据」任务在 */
+    /**
+     * 周期兜底：连着 Wi-Fi 就确保「等移动数据」任务在；没连 Wi-Fi 就确保 Wi-Fi 监听在，
+     * 若还有没处理的断开（例如断开时系统正在自动重连，防抖检查没通过）且已在用移动数据，就补做断开处理。
+     */
     fun onPeriodic(c: Context) {
         val ctx = c.applicationContext
         if (!isActive(ctx)) return
-        if (wifiConnected(ctx)) scheduleWaitForCellular(ctx) else armWifiListener(ctx)
+        val last = Prefs.sp(ctx).getString(KEY_LAST_SSID, null)
+        when (DisconnectPolicy.periodic(snapshot(ctx), pendingDisconnect = last != null)) {
+            DisconnectPolicy.Periodic.WAIT_FOR_CELLULAR -> scheduleWaitForCellular(ctx)
+            DisconnectPolicy.Periodic.HANDLE_MISSED_DISCONNECT -> {
+                Prefs.appendLog(ctx, "周期检查：发现未处理的 Wi-Fi 断开（${if (last == "?") "Wi-Fi" else last}）")
+                onCellularDefault(ctx) // 结束时会重新注册 Wi-Fi 监听
+            }
+            DisconnectPolicy.Periodic.ARM_WIFI_LISTENER -> armWifiListener(ctx)
+        }
     }
 
     private fun notifyFailure(c: Context, title: String, detail: String) {
