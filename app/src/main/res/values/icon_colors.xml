@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Neutral fallback when launcher themed icons are disabled.
+         Pixel themed icons use ic_launcher_monochrome and system colors. -->
+    <color name="ic_launcher_background">#E7E9ED</color>
+    <color name="ic_launcher_foreground">#28313C</color>
+</resources>
