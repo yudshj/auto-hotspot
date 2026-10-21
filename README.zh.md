@@ -69,4 +69,12 @@ adb logcat -s AutoHotspot
 
 ## AI 声明
 
-本项目在 AI 编程助手的参与下完成，各阶段参与度见 [AI-DECLARATION.md](AI-DECLARATION.md)。
+本项目在 AI 编程助手（Claude，通过可用 adb 操作真机的 agent 环境）的参与下完成，详见 [AI-DECLARATION.md](AI-DECLARATION.md)。
+
+| 阶段 | 级别 | AI 参与度 | 决策记录 |
+|---|---|--:|---|
+| breakdown 问题拆解 | copilot 人工把关 | 70% | 作者提出目标和每轮需求 / bug（自动关、自动开、状态显示当前网络、「启动中」提示、开机自启）；Agent 拆成技术任务，在关键点请作者确认（授权 Shizuku、重启验证）。 |
+| design 方案设计 | copilot 人工把关 | 60% | 作者定产品方向：双向自动化、状态卡显示当前网络、保留 5 秒防抖；Agent 定技术方案：Shizuku 调用 `ITetheringConnector`，放弃前台服务，改用 PendingIntent 网络回调 + JobScheduler 接力。 |
+| testing 验收测试 | copilot 人工把关 | 75% | Agent 用 adb 做端到端测试，分析 dumpsys / logcat，截图核对界面；作者完成真机步骤（解锁、连 Wi-Fi、同意重启），并在实际使用中发现 3 个问题。 |
+| implementation 技术实现 | auto 模型自主 | 95% | Agent 编写全部代码，两轮 UI 美化交给 subagent；作者未写代码，只按使用反馈要求修改。 |
+| review 评审处理 | auto 模型自主 | 85% | Agent 自查并审阅 subagent 产出，发现并修复 Compose 不重组、双标题栏等问题；作者未逐行审代码，只做功能验收。 |

@@ -69,4 +69,12 @@ The debug receiver requires the `DUMP` permission, so only adb shell can trigger
 
 ## AI declaration
 
-This project was built with an AI coding agent. See [AI-DECLARATION.md](AI-DECLARATION.md) for the per-stage breakdown.
+This project was built with an AI coding agent (Claude, in an agent harness with adb access to a real device). See [AI-DECLARATION.md](AI-DECLARATION.md).
+
+| Stage | Level | AI share | Decision log |
+|---|---|--:|---|
+| breakdown | copilot (human gatekeeps) | 70% | The author stated the goal and each follow-up request / bug (auto-off, auto-on, show current network, "starting…" hint, start on boot); the agent broke them into technical tasks and asked for confirmation at key points (Shizuku authorization, reboot test). |
+| design | copilot (human gatekeeps) | 60% | The author set the product direction: both automations, status card showing the current network, keep the 5 s debounce. The agent chose the technical approach: Shizuku calling `ITetheringConnector`; no foreground service, instead a PendingIntent network callback + JobScheduler hand-off. |
+| testing | copilot (human gatekeeps) | 75% | The agent ran end-to-end tests over adb, analyzed dumpsys / logcat, checked the UI via screenshots; the author did the on-device steps (unlock, connect Wi-Fi, approve reboot) and found 3 issues in real use. |
+| implementation | auto (model-driven) | 95% | The agent wrote all code and delegated two UI polish passes to sub-agents; the author wrote no code and only requested changes based on usage. |
+| review | auto (model-driven) | 85% | The agent self-reviewed and reviewed sub-agent output, catching and fixing e.g. Compose not recomposing and a duplicate title bar; the author did functional acceptance only, no line-by-line code review. |
