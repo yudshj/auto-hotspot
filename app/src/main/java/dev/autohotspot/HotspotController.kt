@@ -28,8 +28,11 @@ import java.util.concurrent.TimeUnit
  */
 object HotspotController {
     private const val TETHERING_WIFI = 0
-    private const val WIFI_AP_STATE_ENABLING = 12
-    private const val WIFI_AP_STATE_ENABLED = 13
+    const val WIFI_AP_STATE_DISABLING = 10
+    const val WIFI_AP_STATE_DISABLED = 11
+    const val WIFI_AP_STATE_ENABLING = 12
+    const val WIFI_AP_STATE_ENABLED = 13
+    const val WIFI_AP_STATE_FAILED = 14
     const val ACTION_WIFI_AP_STATE_CHANGED = "android.net.wifi.WIFI_AP_STATE_CHANGED"
     const val EXTRA_WIFI_AP_STATE = "wifi_state"
 
@@ -48,15 +51,31 @@ object HotspotController {
 
     fun isApStateOn(state: Int) = state == WIFI_AP_STATE_ENABLED || state == WIFI_AP_STATE_ENABLING
 
-    /** 读取热点状态：粘性广播 WIFI_AP_STATE_CHANGED，失败时回退到 WifiManager.isWifiApEnabled */
-    fun isHotspotEnabled(c: Context): Boolean {
+    /**
+     * 原始热点状态（WIFI_AP_STATE_*，含「启动中/关闭中」），读不到时返回 -1。
+     * 新版系统上 WIFI_AP_STATE_CHANGED 对普通应用不是粘性广播（读不到），所以用隐藏 API
+     * WifiManager.getWifiApState()，粘性广播只作后备。
+     */
+    fun apState(c: Context): Int {
         try {
-            val i = c.applicationContext.registerReceiver(
-                null, IntentFilter(ACTION_WIFI_AP_STATE_CHANGED), Context.RECEIVER_NOT_EXPORTED
-            )
-            if (i != null) return isApStateOn(i.getIntExtra(EXTRA_WIFI_AP_STATE, -1))
+            ensureHiddenApiAccess()
+            val wm = c.applicationContext.getSystemService(WifiManager::class.java)
+            return wm.javaClass.getMethod("getWifiApState").invoke(wm) as Int
         } catch (_: Throwable) {
         }
+        return try {
+            c.applicationContext.registerReceiver(
+                null, IntentFilter(ACTION_WIFI_AP_STATE_CHANGED), Context.RECEIVER_NOT_EXPORTED
+            )?.getIntExtra(EXTRA_WIFI_AP_STATE, -1) ?: -1
+        } catch (_: Throwable) {
+            -1
+        }
+    }
+
+    /** 热点是否开着（含启动中） */
+    fun isHotspotEnabled(c: Context): Boolean {
+        val s = apState(c)
+        if (s != -1) return isApStateOn(s)
         return try {
             ensureHiddenApiAccess()
             val wm = c.applicationContext.getSystemService(WifiManager::class.java)

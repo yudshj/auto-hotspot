@@ -11,7 +11,7 @@ import kotlin.concurrent.thread
 /** 仅 debug：通过 adb 广播测试热点控制逻辑 */
 class DebugReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val pending = goAsync()
+        // 立即结束广播，不阻塞本进程后续广播（否则热点状态广播会在队列里被压住，测不出「启动中」）
         thread {
             val out = try {
                 when (intent.action) {
@@ -27,6 +27,7 @@ class DebugReceiver : BroadcastReceiver() {
                     }
                     else -> ""
                 } + " | hotspot=${HotspotController.isHotspotEnabled(context)}" +
+                    " apState=${HotspotController.apState(context)}" +
                     " shizukuRunning=${HotspotController.shizukuRunning()}" +
                     " shizukuGranted=${HotspotController.shizukuGranted()}" +
                     " writeSettings=${HotspotController.canWriteSettings(context)}" +
@@ -35,7 +36,6 @@ class DebugReceiver : BroadcastReceiver() {
                 Log.e(TAG, "debug failed", t); "ERROR ${t}"
             }
             Log.i(TAG, "debug ${intent.action}: $out")
-            pending.finish()
         }
     }
 

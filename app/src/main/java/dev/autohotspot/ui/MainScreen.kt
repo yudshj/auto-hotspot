@@ -62,6 +62,8 @@ import androidx.compose.material.icons.rounded.WifiTethering
 import androidx.compose.material.icons.rounded.WifiTetheringOff
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -109,6 +111,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
+/** 热点状态，含系统切换过程中的中间态（启动约需 3 秒） */
+enum class HotspotState { Off, Starting, On, Stopping }
+
 /** 当前默认网络（实际承载流量的网络）的类型 */
 enum class NetworkKind { Wifi, Cellular, Other, None }
 
@@ -132,9 +137,10 @@ data class MainUiState(
     val writeSettings: Boolean,
     val shizukuRunning: Boolean,
     val shizukuGranted: Boolean,
-    val hotspotOn: Boolean,
+    val hotspot: HotspotState,
     val log: List<String>,
 ) {
+    val hotspotOn get() = hotspot == HotspotState.On
     val anyStopMethod get() = shizukuGranted || writeSettings
     val basicMissing get() = listOf(fineLocation, backgroundLocation, notifications, backgroundData || !autoOn).count { !it }
     val needsAttention get() = basicMissing > 0 || !anyStopMethod
@@ -277,6 +283,8 @@ private enum class SummaryTone { Good, Neutral, Warn }
 
 /** 状态卡片底部的一句话总结：结合当前网络、热点状态与两项自动化 */
 private fun MainUiState.summary(): Pair<SummaryTone, String> {
+    if (hotspot == HotspotState.Starting) return SummaryTone.Neutral to "热点启动中，通常需要几秒…"
+    if (hotspot == HotspotState.Stopping) return SummaryTone.Neutral to "热点关闭中…"
     if (!enabled && !autoOn) return SummaryTone.Neutral to "两项自动化都已关闭，热点不会被自动控制"
     return when (network) {
         NetworkKind.Wifi -> when {
@@ -344,7 +352,7 @@ private fun StatusCard(state: MainUiState, modifier: Modifier = Modifier) {
                     color = content.copy(alpha = 0.75f),
                     modifier = Modifier.weight(1f),
                 )
-                HotspotPill(state.hotspotOn)
+                HotspotPill(state.hotspot)
             }
 
             Spacer(Modifier.height(16.dp))
@@ -439,7 +447,9 @@ private fun StatusCard(state: MainUiState, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun HotspotPill(on: Boolean) {
+private fun HotspotPill(hotspot: HotspotState) {
+    val on = hotspot == HotspotState.On
+    val busy = hotspot == HotspotState.Starting || hotspot == HotspotState.Stopping
     val cs = MaterialTheme.colorScheme
     val container by animateColorAsState(
         if (on) cs.inverseSurface else cs.surface.copy(alpha = 0.55f), label = "pillContainer"
@@ -452,13 +462,31 @@ private fun HotspotPill(on: Boolean) {
             Modifier.padding(start = 10.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                if (on) Icons.Rounded.WifiTethering else Icons.Rounded.WifiTetheringOff,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = LocalContentColor.current,
+                )
+            } else {
+                Icon(
+                    if (on) Icons.Rounded.WifiTethering else Icons.Rounded.WifiTetheringOff,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
             Spacer(Modifier.width(6.dp))
-            Text(if (on) "热点已开启" else "热点已关闭", style = MaterialTheme.typography.labelLarge)
+            AnimatedContent(targetState = hotspot, label = "pillText") { h ->
+                Text(
+                    when (h) {
+                        HotspotState.On -> "热点已开启"
+                        HotspotState.Off -> "热点已关闭"
+                        HotspotState.Starting -> "热点启动中…"
+                        HotspotState.Stopping -> "热点关闭中…"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
         }
     }
 }

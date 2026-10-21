@@ -29,6 +29,7 @@ import dev.autohotspot.ui.MainActions
 import dev.autohotspot.ui.MainScreen
 import dev.autohotspot.ui.MainUiState
 import dev.autohotspot.ui.NetworkKind
+import dev.autohotspot.ui.HotspotState
 import android.telephony.TelephonyManager
 import rikka.shizuku.Shizuku
 import java.util.concurrent.ConcurrentHashMap
@@ -98,7 +99,20 @@ class MainActivity : ComponentActivity() {
     }.getOrNull()
 
     private val apReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = refresh()
+        override fun onReceive(context: Context, intent: Intent) {
+            android.util.Log.d("AutoHotspot", "UI got AP state broadcast: ${intent.getIntExtra(HotspotController.EXTRA_WIFI_AP_STATE, -1)}")
+            refresh()
+        }
+    }
+
+    /** 热点处于「启动中/关闭中」时每 300ms 重读一次，直到稳定（系统启动热点约需 3 秒） */
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val transitionPoll = Runnable { refresh() }
+    private fun pollWhileTransitioning(h: HotspotState) {
+        handler.removeCallbacks(transitionPoll)
+        if (liveTracking && (h == HotspotState.Starting || h == HotspotState.Stopping)) {
+            handler.postDelayed(transitionPoll, 300)
+        }
     }
 
     override fun onStart() {
@@ -118,6 +132,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         liveTracking = false
+        handler.removeCallbacks(transitionPoll)
         runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(wifiCallback) }
         runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(defaultCallback) }
         runCatching { unregisterReceiver(apReceiver) }
@@ -236,9 +251,16 @@ class MainActivity : ComponentActivity() {
             writeSettings = HotspotController.canWriteSettings(this),
             shizukuRunning = HotspotController.shizukuRunning(),
             shizukuGranted = HotspotController.shizukuGranted(),
-            hotspotOn = HotspotController.isHotspotEnabled(this),
+            hotspot = when (HotspotController.apState(this)) {
+                HotspotController.WIFI_AP_STATE_ENABLING -> HotspotState.Starting
+                HotspotController.WIFI_AP_STATE_ENABLED -> HotspotState.On
+                HotspotController.WIFI_AP_STATE_DISABLING -> HotspotState.Stopping
+                -1 -> if (HotspotController.isHotspotEnabled(this)) HotspotState.On else HotspotState.Off
+                else -> HotspotState.Off
+            },
             log = Prefs.log(this),
         )
+        pollWhileTransitioning(state.hotspot)
         return state
     }
 
