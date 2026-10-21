@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- 仅 debug 构建：adb shell am broadcast -n dev.autohotspot/.DebugReceiver -a stop|start|state -->
+        <receiver android:name=".DebugReceiver" android:exported="true" />
+    </application>
+</manifest>
