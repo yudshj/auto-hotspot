@@ -11,6 +11,7 @@ object Prefs {
     const val KEY_ENABLED = "enabled"
     const val KEY_SSIDS = "ssids"
     const val KEY_AUTO_ON = "auto_on"
+    const val KEY_ANY_WIFI = "any_wifi"
     const val KEY_STATUS_NOTIFY = "status_notify"
     const val KEY_LOG = "log"
     private const val MAX_LOG = 100
@@ -20,6 +21,10 @@ object Prefs {
 
     fun isEnabled(c: Context) = sp(c).getBoolean(KEY_ENABLED, false)
     fun setEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_ENABLED, v).apply()
+
+    /** 不按列表过滤：连上任意 Wi-Fi 都关闭热点 */
+    fun isAnyWifi(c: Context) = sp(c).getBoolean(KEY_ANY_WIFI, false)
+    fun setAnyWifi(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_ANY_WIFI, v).apply()
 
     /** 断开 Wi-Fi、改用移动数据时自动打开热点 */
     fun isAutoOn(c: Context) = sp(c).getBoolean(KEY_AUTO_ON, false)

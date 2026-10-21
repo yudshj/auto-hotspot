@@ -19,6 +19,10 @@ import androidx.compose.material.icons.outlined.WifiFind
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material.icons.rounded.WifiFind
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -52,8 +56,39 @@ internal fun WifiTab(
     modifier: Modifier = Modifier,
 ) {
     TabPage("Wi-Fi", listState, appBarState, modifier) {
+        item(key = "any") { AnyWifiSection(state, actions, Modifier.contentWidth()) }
         item(key = "list") { WifiListSection(state, actions, Modifier.contentWidth()) }
         item(key = "add") { AddWifiSection(state, actions, Modifier.contentWidth()) }
+    }
+}
+
+@Composable
+private fun AnyWifiSection(state: MainUiState, actions: MainActions, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Section("匹配范围", modifier) {
+        SectionCard {
+            ListItem(
+                modifier = Modifier.toggleable(
+                    value = state.anyWifi, role = Role.Switch, onValueChange = actions.setAnyWifi,
+                ),
+                leadingContent = {
+                    IconBadge(
+                        Icons.Rounded.WifiFind,
+                        container = if (state.anyWifi) cs.primary else cs.surfaceContainerHighest,
+                        content = if (state.anyWifi) cs.onPrimary else cs.onSurfaceVariant,
+                    )
+                },
+                headlineContent = { Text("任意 Wi-Fi") },
+                supportingContent = {
+                    Text(
+                        if (state.anyWifi) "不按列表过滤：连上任何 Wi-Fi 都关闭热点，下方列表暂不生效"
+                        else "开启后不按列表过滤，连上任何 Wi-Fi 都关闭热点"
+                    )
+                },
+                trailingContent = { CheckSwitch(state.anyWifi) },
+                colors = transparentListItemColors(),
+            )
+        }
     }
 }
 
@@ -62,9 +97,13 @@ private fun WifiListSection(state: MainUiState, actions: MainActions, modifier: 
     val cs = MaterialTheme.colorScheme
     Section(
         "Wi-Fi 列表", modifier,
-        trailing = if (state.ssids.isEmpty()) null else "${state.ssids.size} 个",
+        trailing = when {
+            state.anyWifi -> "未生效"
+            state.ssids.isEmpty() -> null
+            else -> "${state.ssids.size} 个"
+        },
     ) {
-        SectionCard(Modifier.animateContentSize()) {
+        SectionCard(Modifier.animateContentSize().alpha(if (state.anyWifi) 0.6f else 1f)) {
             if (state.ssids.isEmpty()) {
                 Column(
                     Modifier

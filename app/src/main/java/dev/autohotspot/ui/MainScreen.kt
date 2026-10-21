@@ -65,6 +65,8 @@ enum class NetworkKind { Wifi, Cellular, Other, None }
 data class MainUiState(
     val enabled: Boolean,
     val autoOn: Boolean,
+    /** 不按列表过滤：连上任意 Wi-Fi 都关闭热点 */
+    val anyWifi: Boolean,
     val ssids: List<String>,
     /** 当前连接的 Wi-Fi SSID（即使默认网络是移动数据也可能有值，如 Wi-Fi 无法上网时） */
     val current: String?,
@@ -91,20 +93,35 @@ data class MainUiState(
 ) {
     val hotspotOn get() = hotspot == HotspotState.On
     val anyStopMethod get() = shizukuGranted || writeSettings
-    val basicMissing get() = listOf(fineLocation, backgroundLocation, notifications, backgroundData || !autoOn).count { !it }
-    val needsAttention get() = basicMissing > 0 || !anyStopMethod
+    /** 读取 SSID 才需要位置权限；「任意 Wi-Fi」模式不看 SSID，位置权限变为可选 */
+    val locationRequired get() = !anyWifi
+    /** 自动打开热点只能走 Shizuku（「修改系统设置」只能关不能开） */
+    val shizukuRequired get() = autoOn && !shizukuGranted
+    /** 「控制热点的方式」有缺失：一种都没有，或开了自动打开却没有 Shizuku */
+    val methodMissing get() = !anyStopMethod || shizukuRequired
+    val basicMissing get() = listOf(
+        fineLocation || !locationRequired,
+        backgroundLocation || !locationRequired,
+        notifications,
+        backgroundData || !autoOn,
+    ).count { !it }
+    val needsAttention get() = basicMissing > 0 || methodMissing
     val currentInList get() = current != null && current in ssids
 
-    /** 「权限」卡片中已满足的项数（后台数据在未启用自动打开时视为满足） */
+    /** 当前 Wi-Fi 会触发「关闭热点」：开了「任意 Wi-Fi」，或在列表中 */
+    val currentMatches get() = anyWifi || currentInList
+
+    /** 「权限」卡片中已满足的项数（可选项视为满足：后台数据在未启用自动打开时、位置在「任意 Wi-Fi」时） */
     val basicGranted get() = 4 - basicMissing
 
     /** 「权限」栏导航角标上的待处理项数 */
-    val attentionCount get() = basicMissing + if (anyStopMethod) 0 else 1
+    val attentionCount get() = basicMissing + if (methodMissing) 1 else 0
 }
 
 class MainActions(
     val setEnabled: (Boolean) -> Unit,
     val setAutoOn: (Boolean) -> Unit,
+    val setAnyWifi: (Boolean) -> Unit,
     val setStatusNotify: (Boolean) -> Unit,
     val requestStatusNotifications: () -> Unit,
     val addSsid: (String) -> Unit,

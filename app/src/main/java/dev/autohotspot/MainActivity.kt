@@ -195,6 +195,7 @@ class MainActivity : ComponentActivity() {
             Prefs.setAutoOn(this, it)
             WifiMonitor.sync(this)
         },
+        setAnyWifi = { Prefs.setAnyWifi(this, it) },
         setStatusNotify = { Prefs.setStatusNotify(this, it) },
         requestStatusNotifications = {
             when {
@@ -261,6 +262,7 @@ class MainActivity : ComponentActivity() {
         val state = MainUiState(
             enabled = Prefs.isEnabled(this),
             autoOn = Prefs.isAutoOn(this),
+            anyWifi = Prefs.isAnyWifi(this),
             ssids = Prefs.ssids(this).sorted(),
             current = if (fine) currentSsid() else null,
             network = networkKind(),

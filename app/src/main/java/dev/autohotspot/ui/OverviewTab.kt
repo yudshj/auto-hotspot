@@ -102,10 +102,10 @@ private fun MainUiState.networkInfo(): NetworkInfo = when (network) {
         subtitle = when {
             current == null && !fineLocation -> "Wi-Fi · 需要位置权限才能显示名称"
             current == null -> "Wi-Fi · 暂时读不到名称"
-            currentInList -> "Wi-Fi"
+            currentInList || anyWifi -> "Wi-Fi"
             else -> "Wi-Fi · 不在列表中"
         },
-        inList = currentInList,
+        inList = currentInList && !anyWifi,
     )
     NetworkKind.Cellular -> NetworkInfo(
         kind = network,
@@ -139,11 +139,12 @@ private fun MainUiState.summary(): Pair<SummaryTone, String> {
     if (!enabled && !autoOn) return SummaryTone.Neutral to "两项自动化都已关闭，热点不会被自动控制"
     return when (network) {
         NetworkKind.Wifi -> when {
-            current == null -> SummaryTone.Neutral to "无法识别 Wi-Fi 名称，暂时不会自动关闭热点"
-            !currentInList -> SummaryTone.Neutral to "「$current」不在列表中，热点不受影响"
-            !enabled -> SummaryTone.Neutral to "在「$current」，但连接时关闭热点已停用"
-            hotspotOn -> SummaryTone.Warn to "在「$current」但热点仍开启，请检查关闭热点的方式"
-            else -> SummaryTone.Good to "在「$current」，热点保持关闭"
+            !anyWifi && current == null -> SummaryTone.Neutral to "无法识别 Wi-Fi 名称，暂时不会自动关闭热点"
+            !currentMatches -> SummaryTone.Neutral to "「$current」不在列表中，热点不受影响"
+            !enabled -> SummaryTone.Neutral to "在「${current ?: "Wi-Fi"}」，但连接时关闭热点已停用"
+            hotspotOn -> SummaryTone.Warn to "在「${current ?: "Wi-Fi"}」但热点仍开启，请检查关闭热点的方式"
+            anyWifi -> SummaryTone.Good to "在任意 Wi-Fi，热点保持关闭"
+            else -> SummaryTone.Good to "在「${current ?: "Wi-Fi"}」，热点保持关闭"
         }
         NetworkKind.Cellular -> when {
             !autoOn -> SummaryTone.Neutral to "使用移动数据中，自动打开热点已停用"
@@ -350,6 +351,7 @@ private fun AttentionBanner(state: MainUiState, modifier: Modifier = Modifier, o
     val parts = buildList {
         if (state.basicMissing > 0) add("${state.basicMissing} 项必需权限未授予")
         if (!state.anyStopMethod) add("尚无可用的关闭热点方式")
+        else if (state.shizukuRequired) add("自动打开热点需要 Shizuku")
     }
     Card(
         onClick = onClick,
@@ -410,13 +412,14 @@ private fun AutomationItem(
 
 @Composable
 private fun AutomationSection(state: MainUiState, actions: MainActions, modifier: Modifier = Modifier) {
-    val on = listOf(state.enabled, state.autoOn).count { it }
-    Section("自动化", modifier, trailing = "已开启 $on/2") {
+    val switches = listOf(state.enabled, state.autoOn, state.statusNotify)
+    Section("自动化", modifier, trailing = "已开启 ${switches.count { it }}/${switches.size}") {
         SectionCard {
             AutomationItem(
                 icon = Icons.Rounded.WifiTetheringOff,
-                title = "连接到列表中的 Wi-Fi 时关闭热点",
-                description = "连上「Wi-Fi」栏列表中任一网络即关闭热点",
+                title = if (state.anyWifi) "连接到任意 Wi-Fi 时关闭热点" else "连接到列表中的 Wi-Fi 时关闭热点",
+                description = if (state.anyWifi) "已在「Wi-Fi」栏开启「任意 Wi-Fi」，连上任何网络即关闭热点"
+                else "连上「Wi-Fi」栏列表中任一网络即关闭热点",
                 checked = state.enabled,
                 onCheckedChange = actions.setEnabled,
             )

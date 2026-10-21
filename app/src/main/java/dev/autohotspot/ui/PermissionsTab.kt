@@ -63,7 +63,11 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions, modifie
                 icon = Icons.Rounded.LocationOn,
                 title = "精确位置",
                 description = "读取当前连接的 Wi-Fi 名称（SSID）",
-                status = if (state.fineLocation) PermStatus.Granted else PermStatus.Missing,
+                status = when {
+                    state.fineLocation -> PermStatus.Granted
+                    !state.locationRequired -> PermStatus.Optional
+                    else -> PermStatus.Missing
+                },
                 onGrant = actions.requestLocation,
             )
             CardDivider()
@@ -71,7 +75,11 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions, modifie
                 icon = Icons.Rounded.ShareLocation,
                 title = "后台位置「始终允许」",
                 description = if (state.fineLocation) "在后台也能读取 SSID" else "在后台也能读取 SSID（需先授予精确位置）",
-                status = if (state.backgroundLocation) PermStatus.Granted else PermStatus.Missing,
+                status = when {
+                    state.backgroundLocation -> PermStatus.Granted
+                    !state.locationRequired -> PermStatus.Optional
+                    else -> PermStatus.Missing
+                },
                 onGrant = actions.requestBackgroundLocation,
             )
             CardDivider()
@@ -161,11 +169,12 @@ private fun MethodsSection(state: MainUiState, actions: MainActions, modifier: M
                 title = "Shizuku",
                 description = when {
                     state.shizukuGranted -> "已授权 · 手机重启后需确保 Shizuku 再次启动"
-                    state.shizukuRunning -> "运行中，未授权"
+                    state.shizukuRunning -> "运行中，未授权" + if (state.autoOn) " · 自动打开热点需要它" else ""
                     else -> "未运行 · 请打开 Shizuku 启动服务（每次重启手机后都需要）"
                 },
                 status = when {
                     state.shizukuGranted -> PermStatus.Granted
+                    state.shizukuRequired -> PermStatus.Missing
                     state.anyStopMethod -> PermStatus.Optional
                     else -> PermStatus.Missing
                 },
@@ -176,7 +185,7 @@ private fun MethodsSection(state: MainUiState, actions: MainActions, modifier: M
             PermissionItem(
                 icon = Icons.Rounded.SettingsSuggest,
                 title = "修改系统设置",
-                description = "备用方式，Android 16+ 上可能被系统忽略",
+                description = "备用方式，只能关闭热点，Android 16+ 上可能被系统忽略",
                 status = when {
                     state.writeSettings -> PermStatus.Granted
                     state.anyStopMethod -> PermStatus.Optional

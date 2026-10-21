@@ -134,7 +134,10 @@ object WifiMonitor {
         return normalizeSsid(ctx.getSystemService(WifiManager::class.java).connectionInfo?.ssid)
     }
 
-    /** Wi-Fi 连上时调用：连着列表中的 Wi-Fi 且热点开着，就关掉热点。会阻塞，不要在主线程调用。 */
+    /**
+     * Wi-Fi 连上时调用：连着列表中的 Wi-Fi（或开了「任意 Wi-Fi」）且热点开着，就关掉热点。
+     * 会阻塞，不要在主线程调用。
+     */
     fun onWifiAvailable(c: Context, network: Network?) {
         val ctx = c.applicationContext
         // 监听已被系统释放，靠「等移动数据」任务在 Wi-Fi 断开后重新注册
@@ -148,20 +151,22 @@ object WifiMonitor {
         sp.edit().putString(KEY_LAST_SSID, ssid ?: "?").apply()
 
         if (!Prefs.isEnabled(ctx)) return
-        if (ssid == null || ssid !in Prefs.ssids(ctx)) return
+        // 「任意 Wi-Fi」模式不看 SSID（读不到名称时也照样关闭）
+        if (!Prefs.isAnyWifi(ctx) && (ssid == null || ssid !in Prefs.ssids(ctx))) return
         if (!HotspotController.isHotspotEnabled(ctx)) return
-        Notifier.progress(ctx, "正在关闭热点…", "已连接「$ssid」")
+        val name = ssid ?: "Wi-Fi"
+        Notifier.progress(ctx, "正在关闭热点…", "已连接「$name」")
         waitForShizuku()
         val t0 = System.currentTimeMillis()
         try {
             val msg = HotspotController.stopHotspot(ctx)
-            Prefs.appendLog(ctx, "[连接 $ssid] → $msg")
-            Notifier.done(ctx, "热点已关闭", "已连接「$ssid」· 用时 ${secs(t0)} 秒")
+            Prefs.appendLog(ctx, "[连接 $name] → $msg")
+            Notifier.done(ctx, "热点已关闭", "已连接「$name」· 用时 ${secs(t0)} 秒")
             ctx.getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIF_ID)
         } catch (t: Throwable) {
             Notifier.clear(ctx)
-            Prefs.appendLog(ctx, "[连接 $ssid] → 关闭失败：${t.message}")
-            notifyFailure(ctx, "已连接 $ssid，但无法自动关闭热点", t.message ?: t.toString())
+            Prefs.appendLog(ctx, "[连接 $name] → 关闭失败：${t.message}")
+            notifyFailure(ctx, "已连接 $name，但无法自动关闭热点", t.message ?: t.toString())
         }
     }
 
@@ -173,7 +178,8 @@ object WifiMonitor {
         val ctx = c.applicationContext
         try {
             val sp = Prefs.sp(ctx)
-            val last = sp.getString(KEY_LAST_SSID, null) ?: return
+            // 「?」表示连着 Wi-Fi 但读不到名称（如没有位置权限）
+            val last = sp.getString(KEY_LAST_SSID, null)?.let { if (it == "?") "Wi-Fi" else it } ?: return
             // 防抖：Wi-Fi 漫游/短暂掉线时不动作
             Thread.sleep(5000)
             if (wifiConnected(ctx) || !defaultIsCellular(ctx)) return
