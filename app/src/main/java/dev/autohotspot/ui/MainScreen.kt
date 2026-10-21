@@ -91,13 +91,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
+/** 当前默认网络（实际承载流量的网络）的类型 */
+enum class NetworkKind { Wifi, Cellular, Other, None }
+
 /** 界面所需的全部状态；由 MainActivity 在每次 tick 时重新读取 */
 @Immutable
 data class MainUiState(
     val enabled: Boolean,
     val autoOn: Boolean,
     val ssids: List<String>,
+    /** 当前连接的 Wi-Fi SSID（即使默认网络是移动数据也可能有值，如 Wi-Fi 无法上网时） */
     val current: String?,
+    /** 默认网络类型：状态卡片据此显示「Wi-Fi 名称」或「移动数据」 */
+    val network: NetworkKind,
+    /** 运营商名称（移动数据时显示），可能为空 */
+    val carrier: String?,
     val fineLocation: Boolean,
     val backgroundLocation: Boolean,
     val notifications: Boolean,
@@ -252,20 +260,44 @@ private fun StatusHero(state: MainUiState, actions: MainActions) {
             Spacer(Modifier.height(20.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                val wifiValue = state.current
-                    ?: if (state.fineLocation) "未连接 / 未知" else "需要位置权限"
-                StatusTile(
-                    modifier = Modifier.weight(1f),
-                    icon = if (state.current != null) Icons.Rounded.Wifi else Icons.Rounded.WifiOff,
-                    label = "当前 Wi-Fi",
-                    value = wifiValue,
-                    caption = when {
-                        state.current == null -> null
-                        state.currentInList -> "在列表中"
-                        else -> "不在列表中"
-                    },
-                    highlight = state.currentInList,
-                )
+                when (state.network) {
+                    NetworkKind.Wifi -> StatusTile(
+                        modifier = Modifier.weight(1f),
+                        icon = Icons.Rounded.Wifi,
+                        label = "当前网络 · Wi-Fi",
+                        value = state.current ?: if (state.fineLocation) "Wi-Fi" else "需要位置权限",
+                        caption = when {
+                            state.current == null -> null
+                            state.currentInList -> "在列表中"
+                            else -> "不在列表中"
+                        },
+                        highlight = state.currentInList,
+                    )
+                    NetworkKind.Cellular -> StatusTile(
+                        modifier = Modifier.weight(1f),
+                        icon = Icons.Rounded.SignalCellularAlt,
+                        label = "当前网络",
+                        value = "移动数据",
+                        caption = state.carrier,
+                        highlight = false,
+                    )
+                    NetworkKind.Other -> StatusTile(
+                        modifier = Modifier.weight(1f),
+                        icon = Icons.Rounded.Wifi,
+                        label = "当前网络",
+                        value = "其他网络",
+                        caption = null,
+                        highlight = false,
+                    )
+                    NetworkKind.None -> StatusTile(
+                        modifier = Modifier.weight(1f),
+                        icon = Icons.Rounded.WifiOff,
+                        label = "当前网络",
+                        value = "未联网",
+                        caption = null,
+                        highlight = false,
+                    )
+                }
                 StatusTile(
                     modifier = Modifier.weight(1f),
                     icon = if (state.hotspotOn) Icons.Rounded.WifiTethering else Icons.Rounded.WifiTetheringOff,

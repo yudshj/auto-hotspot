@@ -28,6 +28,8 @@ import dev.autohotspot.ui.AutoHotspotTheme
 import dev.autohotspot.ui.MainActions
 import dev.autohotspot.ui.MainScreen
 import dev.autohotspot.ui.MainUiState
+import dev.autohotspot.ui.NetworkKind
+import android.telephony.TelephonyManager
 import rikka.shizuku.Shizuku
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
@@ -61,6 +63,40 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** 默认网络（实际承载流量的那个）类型，状态卡片据此显示 Wi-Fi 还是移动数据 */
+    @Volatile private var defaultKind: NetworkKind? = null
+
+    private val defaultCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            val kind = when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkKind.Wifi
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkKind.Cellular
+                else -> NetworkKind.Other
+            }
+            if (defaultKind != kind) { defaultKind = kind; runOnUiThread { refresh() } }
+        }
+
+        override fun onLost(network: Network) {
+            defaultKind = NetworkKind.None
+            runOnUiThread { refresh() }
+        }
+    }
+
+    private fun networkKind(): NetworkKind {
+        defaultKind?.let { return it }
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork ?: return NetworkKind.None) ?: return NetworkKind.None
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkKind.Wifi
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkKind.Cellular
+            else -> NetworkKind.Other
+        }
+    }
+
+    private fun carrierName(): String? = runCatching {
+        getSystemService(TelephonyManager::class.java).networkOperatorName.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
     private val apReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = refresh()
     }
@@ -73,6 +109,8 @@ class MainActivity : ComponentActivity() {
             wifiCallback
         )
         liveTracking = true
+        defaultKind = null
+        getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(defaultCallback)
         registerReceiver(
             apReceiver, IntentFilter(HotspotController.ACTION_WIFI_AP_STATE_CHANGED), RECEIVER_EXPORTED
         )
@@ -81,6 +119,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         liveTracking = false
         runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(wifiCallback) }
+        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(defaultCallback) }
         runCatching { unregisterReceiver(apReceiver) }
         super.onStop()
     }
@@ -184,6 +223,8 @@ class MainActivity : ComponentActivity() {
             autoOn = Prefs.isAutoOn(this),
             ssids = Prefs.ssids(this).sorted(),
             current = if (fine) currentSsid() else null,
+            network = networkKind(),
+            carrier = carrierName(),
             fineLocation = fine,
             backgroundLocation = granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
             notifications = granted(Manifest.permission.POST_NOTIFICATIONS),
