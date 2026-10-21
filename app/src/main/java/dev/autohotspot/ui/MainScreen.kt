@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DataUsage
+import androidx.compose.material.icons.rounded.BatteryFull
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Info
@@ -134,6 +135,8 @@ data class MainUiState(
     val notifications: Boolean,
     /** 未被「后台数据」/ 数据节省程序限制。被限制时熄屏后检测不到 Wi-Fi 断开 */
     val backgroundData: Boolean,
+    /** 电池「不受限制」（已加入电池优化白名单）。推荐但非必需，可降低后台任务被推迟的概率 */
+    val batteryUnrestricted: Boolean,
     val writeSettings: Boolean,
     val shizukuRunning: Boolean,
     val shizukuGranted: Boolean,
@@ -159,6 +162,7 @@ class MainActions(
     val requestBackgroundLocation: () -> Unit,
     val requestNotifications: () -> Unit,
     val openAppSettings: () -> Unit,
+    val requestBatteryUnrestricted: () -> Unit,
     val requestShizuku: () -> Unit,
     val requestWriteSettings: () -> Unit,
     val testStopHotspot: () -> Unit,
@@ -891,6 +895,19 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions, modifie
                 },
                 actionLabel = "去设置",
                 onGrant = actions.openAppSettings,
+            )
+            CardDivider()
+            PermissionItem(
+                icon = Icons.Rounded.BatteryFull,
+                title = "电池「不受限制」（推荐）",
+                description = if (state.batteryUnrestricted) {
+                    "不受电池优化限制，后台检测更及时"
+                } else {
+                    "当前为「优化」：深度休眠时后台检测可能被推迟。设为「受限」则完全无法自动切换"
+                },
+                status = if (state.batteryUnrestricted) PermStatus.Granted else PermStatus.Optional,
+                actionLabel = "去设置",
+                onGrant = actions.requestBatteryUnrestricted,
             )
         }
     }

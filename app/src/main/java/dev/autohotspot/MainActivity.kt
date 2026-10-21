@@ -209,6 +209,14 @@ class MainActivity : ComponentActivity() {
         openAppSettings = {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         },
+        requestBatteryUnrestricted = {
+            // 直接弹出系统对话框；部分系统不支持时退回电池优化列表
+            runCatching {
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            }.onFailure {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        },
         requestNotifications = {
             permLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
         },
@@ -246,6 +254,8 @@ class MainActivity : ComponentActivity() {
             fineLocation = fine,
             backgroundLocation = granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
             notifications = granted(Manifest.permission.POST_NOTIFICATIONS),
+            batteryUnrestricted = getSystemService(android.os.PowerManager::class.java)
+                .isIgnoringBatteryOptimizations(packageName),
             backgroundData = getSystemService(ConnectivityManager::class.java).restrictBackgroundStatus !=
                 ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED,
             writeSettings = HotspotController.canWriteSettings(this),
