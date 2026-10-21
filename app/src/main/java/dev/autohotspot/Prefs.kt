@@ -11,6 +11,7 @@ object Prefs {
     const val KEY_ENABLED = "enabled"
     const val KEY_SSIDS = "ssids"
     const val KEY_AUTO_ON = "auto_on"
+    const val KEY_STATUS_NOTIFY = "status_notify"
     const val KEY_LOG = "log"
     private const val MAX_LOG = 100
 
@@ -23,6 +24,10 @@ object Prefs {
     /** 断开 Wi-Fi、改用移动数据时自动打开热点 */
     fun isAutoOn(c: Context) = sp(c).getBoolean(KEY_AUTO_ON, false)
     fun setAutoOn(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_AUTO_ON, v).apply()
+
+    /** 自动开/关热点时发状态通知 */
+    fun isStatusNotify(c: Context) = sp(c).getBoolean(KEY_STATUS_NOTIFY, true)
+    fun setStatusNotify(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_STATUS_NOTIFY, v).apply()
 
     fun ssids(c: Context): Set<String> = sp(c).getStringSet(KEY_SSIDS, emptySet())!!.toSet()
 

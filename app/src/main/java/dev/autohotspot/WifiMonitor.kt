@@ -114,6 +114,8 @@ object WifiMonitor {
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
     }
 
+    private fun secs(t0: Long) = "%.1f".format((System.currentTimeMillis() - t0) / 1000.0)
+
     private fun waitForShizuku() {
         // 刚被拉起时 Shizuku 的 binder 是异步送达的，等一会儿
         val deadline = System.currentTimeMillis() + 8000
@@ -148,12 +150,16 @@ object WifiMonitor {
         if (!Prefs.isEnabled(ctx)) return
         if (ssid == null || ssid !in Prefs.ssids(ctx)) return
         if (!HotspotController.isHotspotEnabled(ctx)) return
+        Notifier.progress(ctx, "正在关闭热点…", "已连接「$ssid」")
         waitForShizuku()
+        val t0 = System.currentTimeMillis()
         try {
             val msg = HotspotController.stopHotspot(ctx)
             Prefs.appendLog(ctx, "[连接 $ssid] → $msg")
+            Notifier.done(ctx, "热点已关闭", "已连接「$ssid」· 用时 ${secs(t0)} 秒")
             ctx.getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIF_ID)
         } catch (t: Throwable) {
+            Notifier.clear(ctx)
             Prefs.appendLog(ctx, "[连接 $ssid] → 关闭失败：${t.message}")
             notifyFailure(ctx, "已连接 $ssid，但无法自动关闭热点", t.message ?: t.toString())
         }
@@ -174,12 +180,16 @@ object WifiMonitor {
             sp.edit().remove(KEY_LAST_SSID).apply()
             Prefs.appendLog(ctx, "已断开 Wi-Fi：$last，改用移动数据")
             if (!Prefs.isAutoOn(ctx) || HotspotController.isHotspotEnabled(ctx)) return
+            Notifier.progress(ctx, "正在打开热点…", "已断开「$last」，改用移动数据")
             waitForShizuku()
+            val t0 = System.currentTimeMillis()
             try {
                 val msg = HotspotController.startHotspot(ctx)
                 Prefs.appendLog(ctx, "[改用移动数据] → $msg")
+                Notifier.done(ctx, "热点已开启", "已断开「$last」，改用移动数据 · 用时 ${secs(t0)} 秒")
                 ctx.getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIF_ID)
             } catch (t: Throwable) {
+                Notifier.clear(ctx)
                 Prefs.appendLog(ctx, "[改用移动数据] → 打开热点失败：${t.message}")
                 notifyFailure(ctx, "已断开 $last，但无法自动打开热点", t.message ?: t.toString())
             }

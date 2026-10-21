@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DataUsage
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.BatteryFull
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -135,6 +136,10 @@ data class MainUiState(
     val notifications: Boolean,
     /** 未被「后台数据」/ 数据节省程序限制。被限制时熄屏后检测不到 Wi-Fi 断开 */
     val backgroundData: Boolean,
+    /** 「开关热点时发通知」开关 */
+    val statusNotify: Boolean,
+    /** 「热点状态」通知渠道可用（应用通知总开关 + 渠道都开着） */
+    val statusChannel: Boolean,
     /** 电池「不受限制」（已加入电池优化白名单）。推荐但非必需，可降低后台任务被推迟的概率 */
     val batteryUnrestricted: Boolean,
     val writeSettings: Boolean,
@@ -156,6 +161,8 @@ data class MainUiState(
 class MainActions(
     val setEnabled: (Boolean) -> Unit,
     val setAutoOn: (Boolean) -> Unit,
+    val setStatusNotify: (Boolean) -> Unit,
+    val requestStatusNotifications: () -> Unit,
     val addSsid: (String) -> Unit,
     val removeSsid: (String) -> Unit,
     val requestLocation: () -> Unit,
@@ -684,6 +691,14 @@ private fun AutomationSection(state: MainUiState, actions: MainActions, modifier
                 checked = state.autoOn,
                 onCheckedChange = actions.setAutoOn,
             )
+            CardDivider()
+            AutomationItem(
+                icon = Icons.Rounded.NotificationsActive,
+                title = "开关热点时发通知",
+                description = "自动打开/关闭热点时在通知栏显示进度和结果（无声），可据此确认后台仍在工作",
+                checked = state.statusNotify,
+                onCheckedChange = actions.setStatusNotify,
+            )
         }
     }
 }
@@ -875,9 +890,26 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions, modifie
             PermissionItem(
                 icon = Icons.Rounded.Notifications,
                 title = "通知",
-                description = "自动操作失败时（如 Shizuku 未运行）提醒你",
+                description = "允许本应用发通知：状态通知与失败提醒（如 Shizuku 未运行）都需要",
                 status = if (state.notifications) PermStatus.Granted else PermStatus.Missing,
                 onGrant = actions.requestNotifications,
+            )
+            CardDivider()
+            PermissionItem(
+                icon = Icons.Rounded.NotificationsActive,
+                title = "状态通知",
+                description = when {
+                    !state.notifications -> "需要先允许通知；点击申请"
+                    state.statusChannel -> "「热点状态」通知已开启：自动开/关热点时会在通知栏提示"
+                    else -> "「热点状态」通知渠道已被关闭，点击去开启"
+                },
+                status = when {
+                    state.notifications && state.statusChannel -> PermStatus.Granted
+                    state.statusNotify -> PermStatus.Missing
+                    else -> PermStatus.Optional
+                },
+                actionLabel = if (state.notifications) "去开启" else "申请",
+                onGrant = actions.requestStatusNotifications,
             )
             CardDivider()
             PermissionItem(

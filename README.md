@@ -19,6 +19,7 @@ Requirements: Android 12+ (tested on Android 17), with [Shizuku](https://shizuku
 - **Auto off**: connecting to a listed Wi-Fi turns the hotspot off.
 - **Auto on** (optional): switching from Wi-Fi to mobile data turns the hotspot on. It only reacts to the actual switch, so turning the hotspot off by hand while on mobile data won't turn it back on.
 - **Status card**: current network (Wi-Fi name / mobile data + carrier), hotspot state including "starting…" / "stopping…", live updates.
+- **Status notifications** (silent, optional): "turning hotspot on/off…" when an automation fires, then "hotspot on/off" once confirmed, with the reason and elapsed time — a quick way to see that the background automation is alive.
 - **Checks & hints** for every required permission and setting, a failure notification (e.g. when Shizuku isn't running), and an in-app log.
 - No foreground service, no persistent notification; restores itself after reboot and app updates.
 

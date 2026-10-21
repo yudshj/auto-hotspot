@@ -149,6 +149,7 @@ class MainActivity : ComponentActivity() {
         Shizuku.addRequestPermissionResultListener(shizukuListener)
         Shizuku.addBinderReceivedListenerSticky(binderListener)
         Shizuku.addBinderDeadListener(binderDeadListener)
+        Notifier.ensureChannel(this) // 先建渠道，「去开启」才能跳到对应的渠道设置页
         // 打开界面时重新注册一次监听（幂等），防止注册因某些原因丢失
         if (Prefs.isEnabled(this) || Prefs.isAutoOn(this)) WifiMonitor.sync(this)
         setContent {
@@ -193,6 +194,19 @@ class MainActivity : ComponentActivity() {
         setAutoOn = {
             Prefs.setAutoOn(this, it)
             WifiMonitor.sync(this)
+        },
+        setStatusNotify = { Prefs.setStatusNotify(this, it) },
+        requestStatusNotifications = {
+            when {
+                !granted(Manifest.permission.POST_NOTIFICATIONS) ->
+                    permLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                !getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled() ->
+                    startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                else -> startActivity(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    .putExtra(Settings.EXTRA_CHANNEL_ID, Notifier.STATUS_CHANNEL_ID))
+            }
         },
         addSsid = { Prefs.addSsid(this, it) },
         removeSsid = { Prefs.removeSsid(this, it) },
@@ -256,6 +270,8 @@ class MainActivity : ComponentActivity() {
             notifications = granted(Manifest.permission.POST_NOTIFICATIONS),
             batteryUnrestricted = getSystemService(android.os.PowerManager::class.java)
                 .isIgnoringBatteryOptimizations(packageName),
+            statusNotify = Prefs.isStatusNotify(this),
+            statusChannel = Notifier.statusChannelEnabled(this),
             backgroundData = getSystemService(ConnectivityManager::class.java).restrictBackgroundStatus !=
                 ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED,
             writeSettings = HotspotController.canWriteSettings(this),
