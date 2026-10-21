@@ -16,7 +16,7 @@ Requirements: Android 12+ (tested on Android 17), with [Shizuku](https://shizuku
 ## Features
 
 - **Wi-Fi list**: add the current Wi-Fi with one tap, type an SSID manually, or delete entries.
-- **Auto off**: connecting to a listed Wi-Fi turns the hotspot off. With the "Any Wi-Fi" switch on, the list is ignored and connecting to any Wi-Fi turns the hotspot off.
+- **Auto off** (on by default): connecting to a listed Wi-Fi turns the hotspot off. The "Any Wi-Fi" switch is on by default, in which case the list is ignored and connecting to any Wi-Fi turns the hotspot off; turn it off to match against the list.
 - **Auto on** (optional): switching from Wi-Fi to mobile data turns the hotspot on. It only reacts to the actual switch, so turning the hotspot off by hand while on mobile data won't turn it back on.
 - **Status card**: current network (Wi-Fi name / mobile data + carrier), hotspot state including "starting…" / "stopping…", live updates.
 - **Status notifications** (silent, optional): "turning hotspot on/off…" when an automation fires, then "hotspot on/off" once confirmed, with the reason and elapsed time — a quick way to see that the background automation is alive.

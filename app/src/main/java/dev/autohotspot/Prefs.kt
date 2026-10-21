@@ -19,11 +19,12 @@ object Prefs {
     fun sp(c: Context): SharedPreferences =
         c.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
-    fun isEnabled(c: Context) = sp(c).getBoolean(KEY_ENABLED, false)
+    /** 「连接 Wi-Fi 时关闭热点」，默认开启 */
+    fun isEnabled(c: Context) = sp(c).getBoolean(KEY_ENABLED, true)
     fun setEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_ENABLED, v).apply()
 
-    /** 不按列表过滤：连上任意 Wi-Fi 都关闭热点 */
-    fun isAnyWifi(c: Context) = sp(c).getBoolean(KEY_ANY_WIFI, false)
+    /** 不按列表过滤：连上任意 Wi-Fi 都关闭热点，默认开启 */
+    fun isAnyWifi(c: Context) = sp(c).getBoolean(KEY_ANY_WIFI, true)
     fun setAnyWifi(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_ANY_WIFI, v).apply()
 
     /** 断开 Wi-Fi、改用移动数据时自动打开热点 */
