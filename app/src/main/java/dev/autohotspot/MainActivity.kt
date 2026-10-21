@@ -138,7 +138,10 @@ class MainActivity : ComponentActivity() {
         if (Prefs.isEnabled(this) || Prefs.isAutoOn(this)) WifiMonitor.sync(this)
         setContent {
             AutoHotspotTheme {
-                Screen(tick) // tick 变化触发重组，重新读取权限/偏好状态
+                // 在这里直接读取 tick（快照状态），tick 一变本作用域就重组、重新读取所有状态。
+                // 注意不能写成 Screen(tick) 而函数体不用它：Compose 编译器会忽略未使用的参数，导致永不重组。
+                val t = tick
+                MainScreen(buildState(t), actions)
             }
         }
     }
@@ -215,8 +218,8 @@ class MainActivity : ComponentActivity() {
         clearLog = { Prefs.clearLog(this) },
     )
 
-    @Composable
-    private fun Screen(@Suppress("UNUSED_PARAMETER") tick: Int) {
+    @Suppress("UNUSED_PARAMETER")
+    private fun buildState(tick: Int): MainUiState {
         val fine = granted(Manifest.permission.ACCESS_FINE_LOCATION)
         val state = MainUiState(
             enabled = Prefs.isEnabled(this),
@@ -236,7 +239,7 @@ class MainActivity : ComponentActivity() {
             hotspotOn = HotspotController.isHotspotEnabled(this),
             log = Prefs.log(this),
         )
-        MainScreen(state, actions)
+        return state
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()

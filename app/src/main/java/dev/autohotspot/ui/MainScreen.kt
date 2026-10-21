@@ -1,8 +1,19 @@
 package dev.autohotspot.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Build
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,26 +29,30 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Notes
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.RadioButtonUnchecked
-import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.WifiFind
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DataUsage
 import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Lan
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.SettingsSuggest
+import androidx.compose.material.icons.rounded.ShareLocation
 import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Warning
@@ -45,6 +60,7 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material.icons.rounded.WifiTethering
 import androidx.compose.material.icons.rounded.WifiTetheringOff
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,8 +68,6 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -62,15 +76,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -81,12 +97,14 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -121,6 +139,9 @@ data class MainUiState(
     val basicMissing get() = listOf(fineLocation, backgroundLocation, notifications, backgroundData || !autoOn).count { !it }
     val needsAttention get() = basicMissing > 0 || !anyStopMethod
     val currentInList get() = current != null && current in ssids
+
+    /** 「权限」卡片中已满足的项数（后台数据在未启用自动打开时视为满足） */
+    val basicGranted get() = 4 - basicMissing
 }
 
 class MainActions(
@@ -138,9 +159,11 @@ class MainActions(
     val clearLog: () -> Unit,
 )
 
-// LazyColumn 中各项的固定索引（用于提示卡片跳转）
-private const val INDEX_PERMISSIONS = 4
-private const val INDEX_METHODS = 5
+/** LazyColumn 中的各个区块；按此顺序显示，跳转目标的索引由列表动态计算 */
+private enum class Block { Status, Banner, Automation, Wifi, Permissions, Methods, Log }
+
+/** 宽屏（如折叠屏内屏）上限制内容宽度，避免卡片被拉得过宽 */
+private val MaxContentWidth = 640.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -149,8 +172,11 @@ fun MainScreen(state: MainUiState, actions: MainActions) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    val blocks = Block.entries.filter { it != Block.Banner || state.needsAttention }
+
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             LargeTopAppBar(
                 title = { Text("热点自动关") },
@@ -171,183 +197,268 @@ fun MainScreen(state: MainUiState, actions: MainActions) {
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
-                top = innerPadding.calculateTopPadding() + 4.dp,
-                bottom = innerPadding.calculateBottomPadding() + 24.dp,
+                top = innerPadding.calculateTopPadding() + 8.dp,
+                bottom = innerPadding.calculateBottomPadding() + 32.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
-            item(key = "hero") { StatusHero(state, actions) }
-            if (state.needsAttention) {
-                item(key = "banner") {
-                    AttentionBanner(state, Modifier.animateItem()) {
-                        scope.launch {
-                            // 横幅存在时：hero=0, banner=1, rules=2, wifi=3, perms=4, methods=5
-                            listState.animateScrollToItem(
-                                if (state.basicMissing > 0) INDEX_PERMISSIONS else INDEX_METHODS
-                            )
-                        }
+            items(blocks, key = { it.name }) { block ->
+                val m = Modifier
+                    .widthIn(max = MaxContentWidth)
+                    .fillMaxWidth()
+                    .animateItem()
+                when (block) {
+                    Block.Status -> StatusCard(state, m)
+                    Block.Banner -> AttentionBanner(state, m) {
+                        val target = if (state.basicMissing > 0) Block.Permissions else Block.Methods
+                        val index = blocks.indexOf(target)
+                        if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
                     }
+                    Block.Automation -> AutomationSection(state, actions, m)
+                    Block.Wifi -> WifiListSection(state, actions, m)
+                    Block.Permissions -> PermissionsSection(state, actions, m)
+                    Block.Methods -> MethodsSection(state, actions, m)
+                    Block.Log -> LogSection(state.log, actions.clearLog, m)
                 }
             }
-            item(key = "rules") { RulesSection(state, actions) }
-            item(key = "wifi") { WifiListSection(state, actions) }
-            item(key = "perms") { PermissionsSection(state, actions) }
-            item(key = "methods") { MethodsSection(state, actions) }
-            item(key = "log") { LogSection(state.log, actions.clearLog) }
         }
     }
 }
 
 // ───────────────────────────── 状态卡片 ─────────────────────────────
 
-@Composable
-private fun StatusHero(state: MainUiState, actions: MainActions) {
-    val cs = MaterialTheme.colorScheme
-    val active = state.enabled
-    val container by animateColorAsState(
-        if (active) cs.primaryContainer else cs.surfaceContainerHigh, label = "heroContainer"
+/** 状态卡片中「当前网络」一栏要显示的内容 */
+private data class NetworkInfo(
+    val kind: NetworkKind,
+    val icon: ImageVector,
+    val title: String,
+    val subtitle: String,
+    val inList: Boolean,
+)
+
+private fun MainUiState.networkInfo(): NetworkInfo = when (network) {
+    NetworkKind.Wifi -> NetworkInfo(
+        kind = network,
+        icon = Icons.Rounded.Wifi,
+        title = current ?: "Wi-Fi",
+        subtitle = when {
+            current == null && !fineLocation -> "Wi-Fi · 需要位置权限才能显示名称"
+            current == null -> "Wi-Fi · 暂时读不到名称"
+            currentInList -> "Wi-Fi"
+            else -> "Wi-Fi · 不在列表中"
+        },
+        inList = currentInList,
     )
-    val content = if (active) cs.onPrimaryContainer else cs.onSurface
+    NetworkKind.Cellular -> NetworkInfo(
+        kind = network,
+        icon = Icons.Rounded.SignalCellularAlt,
+        title = "移动数据",
+        subtitle = carrier ?: "蜂窝网络",
+        inList = false,
+    )
+    NetworkKind.Other -> NetworkInfo(
+        kind = network,
+        icon = Icons.Rounded.Lan,
+        title = "其他网络",
+        subtitle = "既不是 Wi-Fi 也不是移动数据",
+        inList = false,
+    )
+    NetworkKind.None -> NetworkInfo(
+        kind = network,
+        icon = Icons.Rounded.WifiOff,
+        title = "未联网",
+        subtitle = "当前没有可用的网络连接",
+        inList = false,
+    )
+}
+
+private enum class SummaryTone { Good, Neutral, Warn }
+
+/** 状态卡片底部的一句话总结：结合当前网络、热点状态与两项自动化 */
+private fun MainUiState.summary(): Pair<SummaryTone, String> {
+    if (!enabled && !autoOn) return SummaryTone.Neutral to "两项自动化都已关闭，热点不会被自动控制"
+    return when (network) {
+        NetworkKind.Wifi -> when {
+            current == null -> SummaryTone.Neutral to "无法识别 Wi-Fi 名称，暂时不会自动关闭热点"
+            !currentInList -> SummaryTone.Neutral to "「$current」不在列表中，热点不受影响"
+            !enabled -> SummaryTone.Neutral to "在「$current」，但连接时关闭热点已停用"
+            hotspotOn -> SummaryTone.Warn to "在「$current」但热点仍开启，请检查关闭热点的方式"
+            else -> SummaryTone.Good to "在「$current」，热点保持关闭"
+        }
+        NetworkKind.Cellular -> when {
+            !autoOn -> SummaryTone.Neutral to "使用移动数据中，自动打开热点已停用"
+            hotspotOn -> SummaryTone.Good to "使用移动数据中，热点已开启"
+            else -> SummaryTone.Neutral to "使用移动数据中；下次从 Wi-Fi 切到移动数据时会自动打开热点"
+        }
+        NetworkKind.Other -> SummaryTone.Neutral to "通过其他网络联网，不会触发自动化"
+        NetworkKind.None -> SummaryTone.Neutral to "未联网，连接 Wi-Fi 或移动数据后自动化才会生效"
+    }
+}
+
+@Composable
+private fun StatusCard(state: MainUiState, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    val active = state.enabled || state.autoOn
+    val net = state.networkInfo()
+    val (tone, summary) = state.summary()
+
+    // 卡片色调随网络类型变化：Wi-Fi 用主色、移动数据用第三色，其他/未联网/自动化关闭时用中性色
+    val (targetContainer, targetContent) = when {
+        !active -> cs.surfaceContainerHigh to cs.onSurface
+        net.kind == NetworkKind.Wifi -> cs.primaryContainer to cs.onPrimaryContainer
+        net.kind == NetworkKind.Cellular -> cs.tertiaryContainer to cs.onTertiaryContainer
+        else -> cs.surfaceContainerHigh to cs.onSurface
+    }
+    val container by animateColorAsState(targetContainer, label = "statusContainer")
+    val content by animateColorAsState(targetContent, label = "statusContent")
+    val accent by animateColorAsState(
+        when {
+            !active -> cs.onSurfaceVariant
+            net.kind == NetworkKind.Wifi -> cs.primary
+            net.kind == NetworkKind.Cellular -> cs.tertiary
+            else -> cs.onSurfaceVariant
+        },
+        label = "statusAccent",
+    )
+    val onAccent by animateColorAsState(
+        when {
+            !active -> cs.surfaceContainerHigh
+            net.kind == NetworkKind.Wifi -> cs.onPrimary
+            net.kind == NetworkKind.Cellular -> cs.onTertiary
+            else -> cs.surfaceContainerHigh
+        },
+        label = "statusOnAccent",
+    )
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
         shape = MaterialTheme.shapes.extraLarge,
         colors = CardDefaults.cardColors(containerColor = container, contentColor = content),
     ) {
         Column(Modifier.padding(20.dp)) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.large)
-                    .toggleable(
-                        value = state.enabled,
-                        role = Role.Switch,
-                        onValueChange = actions.setEnabled,
-                    ),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier
-                        .size(56.dp)
-                        .clip(CircleShape)
-                        .background(if (active) cs.primary else cs.surfaceVariant),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        if (active) Icons.Rounded.Shield else Icons.Outlined.Shield,
-                        contentDescription = null,
-                        tint = if (active) cs.onPrimary else cs.onSurfaceVariant,
-                        modifier = Modifier.size(30.dp),
-                    )
-                }
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        if (active) "正在监控" else "监控已关闭",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Text(
-                        if (active) "连接到列表中的 Wi-Fi 时自动关闭热点" else "打开开关以启用自动关闭",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = content.copy(alpha = 0.8f),
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Switch(checked = state.enabled, onCheckedChange = null)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "当前网络",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = content.copy(alpha = 0.75f),
+                    modifier = Modifier.weight(1f),
+                )
+                HotspotPill(state.hotspotOn)
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(16.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                when (state.network) {
-                    NetworkKind.Wifi -> StatusTile(
-                        modifier = Modifier.weight(1f),
-                        icon = Icons.Rounded.Wifi,
-                        label = "当前网络 · Wi-Fi",
-                        value = state.current ?: if (state.fineLocation) "Wi-Fi" else "需要位置权限",
-                        caption = when {
-                            state.current == null -> null
-                            state.currentInList -> "在列表中"
-                            else -> "不在列表中"
-                        },
-                        highlight = state.currentInList,
-                    )
-                    NetworkKind.Cellular -> StatusTile(
-                        modifier = Modifier.weight(1f),
-                        icon = Icons.Rounded.SignalCellularAlt,
-                        label = "当前网络",
-                        value = "移动数据",
-                        caption = state.carrier,
-                        highlight = false,
-                    )
-                    NetworkKind.Other -> StatusTile(
-                        modifier = Modifier.weight(1f),
-                        icon = Icons.Rounded.Wifi,
-                        label = "当前网络",
-                        value = "其他网络",
-                        caption = null,
-                        highlight = false,
-                    )
-                    NetworkKind.None -> StatusTile(
-                        modifier = Modifier.weight(1f),
-                        icon = Icons.Rounded.WifiOff,
-                        label = "当前网络",
-                        value = "未联网",
-                        caption = null,
-                        highlight = false,
-                    )
+            AnimatedContent(
+                targetState = net,
+                contentKey = { it.kind to it.title },
+                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                label = "network",
+            ) { info ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .background(accent),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(info.icon, contentDescription = null, tint = onAccent, modifier = Modifier.size(28.dp))
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            info.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                info.subtitle,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = content.copy(alpha = 0.8f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (info.inList) {
+                                Spacer(Modifier.width(8.dp))
+                                Chip(
+                                    text = "在列表中",
+                                    icon = Icons.Rounded.Check,
+                                    container = accent,
+                                    content = onAccent,
+                                )
+                            }
+                        }
+                    }
                 }
-                StatusTile(
-                    modifier = Modifier.weight(1f),
-                    icon = if (state.hotspotOn) Icons.Rounded.WifiTethering else Icons.Rounded.WifiTetheringOff,
-                    label = "热点",
-                    value = if (state.hotspotOn) "已开启" else "已关闭",
-                    caption = null,
-                    highlight = state.hotspotOn,
-                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = cs.surface.copy(alpha = 0.55f),
+                contentColor = cs.onSurface,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        when (tone) {
+                            SummaryTone.Good -> Icons.Rounded.CheckCircle
+                            SummaryTone.Neutral -> Icons.Rounded.Info
+                            SummaryTone.Warn -> Icons.Rounded.Warning
+                        },
+                        contentDescription = null,
+                        tint = when (tone) {
+                            SummaryTone.Good -> cs.primary
+                            SummaryTone.Neutral -> cs.onSurfaceVariant
+                            SummaryTone.Warn -> cs.error
+                        },
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    AnimatedContent(
+                        targetState = summary,
+                        transitionSpec = { fadeIn() togetherWith fadeOut() },
+                        label = "summary",
+                    ) {
+                        Text(it, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun StatusTile(
-    modifier: Modifier,
-    icon: ImageVector,
-    label: String,
-    value: String,
-    caption: String?,
-    highlight: Boolean,
-) {
+private fun HotspotPill(on: Boolean) {
     val cs = MaterialTheme.colorScheme
-    Surface(
-        modifier = modifier,
-        shape = MaterialTheme.shapes.large,
-        color = cs.surfaceContainerLowest.copy(alpha = 0.7f),
-        contentColor = cs.onSurface,
-    ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+    val container by animateColorAsState(
+        if (on) cs.inverseSurface else cs.surface.copy(alpha = 0.55f), label = "pillContainer"
+    )
+    val content by animateColorAsState(
+        if (on) cs.inverseOnSurface else cs.onSurfaceVariant, label = "pillContent"
+    )
+    Surface(shape = CircleShape, color = container, contentColor = content) {
+        Row(
+            Modifier.padding(start = 10.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Icon(
-                icon, contentDescription = null,
-                tint = if (highlight) cs.primary else cs.onSurfaceVariant,
-                modifier = Modifier.size(24.dp),
+                if (on) Icons.Rounded.WifiTethering else Icons.Rounded.WifiTetheringOff,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
             )
-            Spacer(Modifier.height(8.dp))
-            Text(label, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-            Text(
-                value,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (caption != null) {
-                Text(
-                    caption,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (highlight) cs.primary else cs.onSurfaceVariant,
-                )
-            }
+            Spacer(Modifier.width(6.dp))
+            Text(if (on) "热点已开启" else "热点已关闭", style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -362,7 +473,8 @@ private fun AttentionBanner(state: MainUiState, modifier: Modifier = Modifier, o
         if (!state.anyStopMethod) add("尚无可用的关闭热点方式")
     }
     Card(
-        modifier = modifier.fillMaxWidth(),
+        onClick = onClick,
+        modifier = modifier,
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(
             containerColor = cs.errorContainer,
@@ -378,7 +490,7 @@ private fun AttentionBanner(state: MainUiState, modifier: Modifier = Modifier, o
             Column(Modifier.weight(1f)) {
                 Text("需要处理", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    parts.joinToString("，") + "，自动关闭可能无法工作",
+                    parts.joinToString("，") + "，自动化可能无法工作",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -396,23 +508,36 @@ private fun AttentionBanner(state: MainUiState, modifier: Modifier = Modifier, o
 private fun Section(
     title: String,
     modifier: Modifier = Modifier,
+    trailing: String? = null,
     content: @Composable () -> Unit,
 ) {
-    Column(modifier.fillMaxWidth()) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
-        )
+    Column(modifier) {
+        Row(
+            Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f),
+            )
+            if (trailing != null) {
+                Text(
+                    trailing,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         content()
     }
 }
 
 @Composable
-private fun SectionCard(content: @Composable () -> Unit) {
+private fun SectionCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
@@ -428,29 +553,104 @@ private fun transparentListItemColors() =
 private fun CardDivider() {
     HorizontalDivider(
         Modifier.padding(horizontal = 16.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
     )
 }
 
-// ───────────────────────────── 规则 ─────────────────────────────
+/** 列表项前的圆形图标底座 */
+@Composable
+private fun IconBadge(
+    icon: ImageVector,
+    container: Color,
+    content: Color,
+    size: Dp = 40.dp,
+) {
+    val bg by animateColorAsState(container, label = "badgeBg")
+    val fg by animateColorAsState(content, label = "badgeFg")
+    Box(
+        Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(bg),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(size * 0.55f))
+    }
+}
 
 @Composable
-private fun RulesSection(state: MainUiState, actions: MainActions) {
-    Section("规则") {
+private fun Chip(text: String, icon: ImageVector?, container: Color, content: Color) {
+    Surface(shape = CircleShape, color = container, contentColor = content) {
+        Row(
+            Modifier.padding(start = if (icon != null) 6.dp else 8.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (icon != null) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(text, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun CheckSwitch(checked: Boolean) {
+    Switch(
+        checked = checked,
+        onCheckedChange = null, // 整行可点，由外层 toggleable 处理
+        thumbContent = if (checked) {
+            { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(SwitchDefaults.IconSize)) }
+        } else null,
+    )
+}
+
+// ───────────────────────────── 自动化 ─────────────────────────────
+
+@Composable
+private fun AutomationItem(
+    icon: ImageVector,
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    ListItem(
+        modifier = Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
+        leadingContent = {
+            IconBadge(
+                icon,
+                container = if (checked) cs.primary else cs.surfaceContainerHighest,
+                content = if (checked) cs.onPrimary else cs.onSurfaceVariant,
+            )
+        },
+        headlineContent = { Text(title) },
+        supportingContent = { Text(description) },
+        trailingContent = { CheckSwitch(checked) },
+        colors = transparentListItemColors(),
+    )
+}
+
+@Composable
+private fun AutomationSection(state: MainUiState, actions: MainActions, modifier: Modifier = Modifier) {
+    val on = listOf(state.enabled, state.autoOn).count { it }
+    Section("自动化", modifier, trailing = "已开启 $on/2") {
         SectionCard {
-            ListItem(
-                modifier = Modifier.toggleable(
-                    value = state.autoOn,
-                    role = Role.Switch,
-                    onValueChange = actions.setAutoOn,
-                ),
-                leadingContent = { Icon(Icons.Rounded.SignalCellularAlt, contentDescription = null) },
-                headlineContent = { Text("断开 Wi-Fi 后自动打开热点") },
-                supportingContent = {
-                    Text("从 Wi-Fi 切换到移动数据时打开热点；在流量下手动关掉热点不会被再次打开")
-                },
-                trailingContent = { Switch(checked = state.autoOn, onCheckedChange = null) },
-                colors = transparentListItemColors(),
+            AutomationItem(
+                icon = Icons.Rounded.WifiTetheringOff,
+                title = "连接到列表中的 Wi-Fi 时关闭热点",
+                description = "连上下方列表中任一 Wi-Fi 即关闭热点",
+                checked = state.enabled,
+                onCheckedChange = actions.setEnabled,
+            )
+            CardDivider()
+            AutomationItem(
+                icon = Icons.Rounded.WifiTethering,
+                title = "断开 Wi-Fi 后自动打开热点",
+                description = "从 Wi-Fi 切换到移动数据时打开热点；在移动数据下手动关闭热点后不会再次打开",
+                checked = state.autoOn,
+                onCheckedChange = actions.setAutoOn,
             )
         }
     }
@@ -459,12 +659,15 @@ private fun RulesSection(state: MainUiState, actions: MainActions) {
 // ───────────────────────────── Wi-Fi 列表 ─────────────────────────────
 
 @Composable
-private fun WifiListSection(state: MainUiState, actions: MainActions) {
+private fun WifiListSection(state: MainUiState, actions: MainActions, modifier: Modifier = Modifier) {
     var input by rememberSaveable { mutableStateOf("") }
     val cs = MaterialTheme.colorScheme
 
-    Section("Wi-Fi 列表") {
-        SectionCard {
+    Section(
+        "Wi-Fi 列表", modifier,
+        trailing = if (state.ssids.isEmpty()) null else "${state.ssids.size} 个",
+    ) {
+        SectionCard(Modifier.animateContentSize()) {
             if (state.ssids.isEmpty()) {
                 Column(
                     Modifier
@@ -472,18 +675,12 @@ private fun WifiListSection(state: MainUiState, actions: MainActions) {
                         .padding(horizontal = 24.dp, vertical = 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Box(
-                        Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(cs.secondaryContainer),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Outlined.WifiFind, contentDescription = null,
-                            tint = cs.onSecondaryContainer, modifier = Modifier.size(28.dp),
-                        )
-                    }
+                    IconBadge(
+                        Icons.Outlined.WifiFind,
+                        container = cs.secondaryContainer,
+                        content = cs.onSecondaryContainer,
+                        size = 56.dp,
+                    )
                     Spacer(Modifier.height(12.dp))
                     Text("列表为空", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(4.dp))
@@ -500,9 +697,10 @@ private fun WifiListSection(state: MainUiState, actions: MainActions) {
                     val isCurrent = s == state.current
                     ListItem(
                         leadingContent = {
-                            Icon(
-                                Icons.Rounded.Wifi, contentDescription = null,
-                                tint = if (isCurrent) cs.primary else cs.onSurfaceVariant,
+                            IconBadge(
+                                Icons.Rounded.Wifi,
+                                container = if (isCurrent) cs.primaryContainer else cs.surfaceContainerHighest,
+                                content = if (isCurrent) cs.onPrimaryContainer else cs.onSurfaceVariant,
                             )
                         },
                         headlineContent = {
@@ -513,7 +711,7 @@ private fun WifiListSection(state: MainUiState, actions: MainActions) {
                                 )
                                 if (isCurrent) {
                                     Spacer(Modifier.width(8.dp))
-                                    CurrentBadge()
+                                    Chip("当前", icon = null, container = cs.primary, content = cs.onPrimary)
                                 }
                             }
                         },
@@ -544,7 +742,8 @@ private fun WifiListSection(state: MainUiState, actions: MainActions) {
                     contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
                 ) {
                     Icon(
-                        Icons.Rounded.Add, contentDescription = null,
+                        if (state.currentInList) Icons.Rounded.Check else Icons.Rounded.Add,
+                        contentDescription = null,
                         modifier = Modifier.size(ButtonDefaults.IconSize),
                     )
                     Spacer(Modifier.width(ButtonDefaults.IconSpacing))
@@ -565,7 +764,7 @@ private fun WifiListSection(state: MainUiState, actions: MainActions) {
                     singleLine = true,
                     shape = MaterialTheme.shapes.medium,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    keyboardActions = KeyboardActions(onDone = { if (input.isNotBlank()) submit() }),
                     trailingIcon = {
                         IconButton(onClick = submit, enabled = input.isNotBlank()) {
                             Icon(Icons.Rounded.Add, contentDescription = "添加")
@@ -578,63 +777,55 @@ private fun WifiListSection(state: MainUiState, actions: MainActions) {
     }
 }
 
-@Composable
-private fun CurrentBadge() {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
-    ) {
-        Text(
-            "当前",
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-        )
-    }
-}
-
 // ───────────────────────────── 权限 ─────────────────────────────
 
 private enum class PermStatus { Granted, Missing, Optional }
 
 @Composable
 private fun PermissionItem(
+    icon: ImageVector,
     title: String,
     description: String,
     status: PermStatus,
+    actionLabel: String = "授予",
     onGrant: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     ListItem(
         leadingContent = {
-            when (status) {
-                PermStatus.Granted -> Icon(Icons.Rounded.CheckCircle, contentDescription = "已授予", tint = cs.primary)
-                PermStatus.Missing -> Icon(Icons.Rounded.Error, contentDescription = "未授予", tint = cs.error)
-                PermStatus.Optional -> Icon(
-                    Icons.Outlined.RadioButtonUnchecked, contentDescription = "未授予（可选）", tint = cs.outline,
-                )
-            }
+            IconBadge(
+                icon,
+                container = when (status) {
+                    PermStatus.Granted -> cs.secondaryContainer
+                    PermStatus.Missing -> cs.errorContainer
+                    PermStatus.Optional -> cs.surfaceContainerHighest
+                },
+                content = when (status) {
+                    PermStatus.Granted -> cs.onSecondaryContainer
+                    PermStatus.Missing -> cs.onErrorContainer
+                    PermStatus.Optional -> cs.onSurfaceVariant
+                },
+            )
         },
         headlineContent = { Text(title) },
         supportingContent = { Text(description) },
-        trailingContent = if (status != PermStatus.Granted) {
-            {
-                if (status == PermStatus.Missing) {
-                    FilledTonalButton(onClick = onGrant) { Text("授予") }
-                } else {
-                    TextButton(onClick = onGrant) { Text("授予") }
-                }
+        trailingContent = {
+            when (status) {
+                PermStatus.Granted -> Icon(Icons.Rounded.CheckCircle, contentDescription = "已授予", tint = cs.primary)
+                PermStatus.Missing -> FilledTonalButton(onClick = onGrant) { Text(actionLabel) }
+                PermStatus.Optional -> TextButton(onClick = onGrant) { Text(actionLabel) }
             }
-        } else null,
+        },
         colors = transparentListItemColors(),
     )
 }
 
 @Composable
-private fun PermissionsSection(state: MainUiState, actions: MainActions) {
-    Section("权限") {
+private fun PermissionsSection(state: MainUiState, actions: MainActions, modifier: Modifier = Modifier) {
+    Section("权限", modifier, trailing = "已满足 ${state.basicGranted}/4") {
         SectionCard {
             PermissionItem(
+                icon = Icons.Rounded.LocationOn,
                 title = "精确位置",
                 description = "读取当前连接的 Wi-Fi 名称（SSID）",
                 status = if (state.fineLocation) PermStatus.Granted else PermStatus.Missing,
@@ -642,6 +833,7 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions) {
             )
             CardDivider()
             PermissionItem(
+                icon = Icons.Rounded.ShareLocation,
                 title = "后台位置「始终允许」",
                 description = if (state.fineLocation) "在后台也能读取 SSID" else "在后台也能读取 SSID（需先授予精确位置）",
                 status = if (state.backgroundLocation) PermStatus.Granted else PermStatus.Missing,
@@ -649,17 +841,19 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions) {
             )
             CardDivider()
             PermissionItem(
+                icon = Icons.Rounded.Notifications,
                 title = "通知",
-                description = "无法自动关闭热点时（如 Shizuku 未运行）提醒你",
+                description = "自动操作失败时（如 Shizuku 未运行）提醒你",
                 status = if (state.notifications) PermStatus.Granted else PermStatus.Missing,
                 onGrant = actions.requestNotifications,
             )
             CardDivider()
             PermissionItem(
+                icon = Icons.Rounded.DataUsage,
                 title = "后台数据",
                 description = when {
-                    state.backgroundData -> "允许后台使用移动数据，熄屏时也能检测到 Wi-Fi 断开"
-                    else -> "已被限制：熄屏后检测不到 Wi-Fi 断开。请在 应用信息 → 移动数据和 WLAN 中开启「后台数据」" +
+                    state.backgroundData -> "未受限制，熄屏时也能检测到 Wi-Fi 切换到移动数据"
+                    else -> "已被限制：熄屏后检测不到 Wi-Fi 切换到移动数据。请在 应用信息 → 移动数据和 WLAN 中开启「后台数据」" +
                         "（若开着数据节省程序，还需开启「不受数据流量限制」）"
                 },
                 status = when {
@@ -667,6 +861,7 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions) {
                     !state.autoOn -> PermStatus.Optional
                     else -> PermStatus.Missing
                 },
+                actionLabel = "去设置",
                 onGrant = actions.openAppSettings,
             )
         }
@@ -674,9 +869,12 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions) {
 }
 
 @Composable
-private fun MethodsSection(state: MainUiState, actions: MainActions) {
+private fun MethodsSection(state: MainUiState, actions: MainActions, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    Section("关闭热点的方式") {
+    Section(
+        "控制热点的方式", modifier,
+        trailing = if (state.anyStopMethod) "可用" else "未配置",
+    ) {
         SectionCard {
             Row(
                 Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
@@ -694,6 +892,7 @@ private fun MethodsSection(state: MainUiState, actions: MainActions) {
                 )
             }
             PermissionItem(
+                icon = Icons.Rounded.Terminal,
                 title = "Shizuku",
                 description = when {
                     state.shizukuGranted -> "已授权 · 手机重启后需确保 Shizuku 再次启动"
@@ -705,10 +904,12 @@ private fun MethodsSection(state: MainUiState, actions: MainActions) {
                     state.anyStopMethod -> PermStatus.Optional
                     else -> PermStatus.Missing
                 },
+                actionLabel = "授权",
                 onGrant = actions.requestShizuku,
             )
             CardDivider()
             PermissionItem(
+                icon = Icons.Rounded.SettingsSuggest,
                 title = "修改系统设置",
                 description = "备用方式，Android 16+ 上可能被系统忽略",
                 status = when {
@@ -716,6 +917,7 @@ private fun MethodsSection(state: MainUiState, actions: MainActions) {
                     state.anyStopMethod -> PermStatus.Optional
                     else -> PermStatus.Missing
                 },
+                actionLabel = "去设置",
                 onGrant = actions.requestWriteSettings,
             )
             if (!state.shizukuGranted && state.writeSettings && Build.VERSION.SDK_INT >= 36) {
@@ -764,19 +966,25 @@ private const val COLLAPSED_LOG_LINES = 3
 private const val MAX_LOG_LINES = 40
 
 @Composable
-private fun LogSection(log: List<String>, onClear: () -> Unit) {
+private fun LogSection(log: List<String>, onClear: () -> Unit, modifier: Modifier = Modifier) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     val rotation by animateFloatAsState(if (expanded) 180f else 0f, label = "logChevron")
     val canExpand = log.size > COLLAPSED_LOG_LINES
 
-    Section("日志") {
-        SectionCard {
+    Section("日志", modifier) {
+        SectionCard(Modifier.animateContentSize()) {
             ListItem(
                 modifier = if (canExpand) Modifier.toggleable(
                     value = expanded, role = Role.Button, onValueChange = { expanded = it },
                 ) else Modifier,
-                leadingContent = { Icon(Icons.AutoMirrored.Rounded.Notes, contentDescription = null) },
+                leadingContent = {
+                    IconBadge(
+                        Icons.AutoMirrored.Rounded.ReceiptLong,
+                        container = cs.surfaceContainerHighest,
+                        content = cs.onSurfaceVariant,
+                    )
+                },
                 headlineContent = { Text("运行日志") },
                 supportingContent = { Text(if (log.isEmpty()) "暂无记录" else "共 ${log.size} 条") },
                 trailingContent = {
@@ -795,7 +1003,11 @@ private fun LogSection(log: List<String>, onClear: () -> Unit) {
                 },
                 colors = transparentListItemColors(),
             )
-            if (log.isNotEmpty()) {
+            AnimatedVisibility(
+                visible = log.isNotEmpty(),
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
                 val lines = if (expanded) log.take(MAX_LOG_LINES) else log.take(COLLAPSED_LOG_LINES)
                 Column(
                     Modifier
@@ -804,20 +1016,13 @@ private fun LogSection(log: List<String>, onClear: () -> Unit) {
                         .clip(MaterialTheme.shapes.medium)
                         .background(cs.surfaceContainerHighest)
                         .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Rounded.Terminal, contentDescription = null,
-                            tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (expanded) "最近 ${lines.size} 条" else "最新",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = cs.onSurfaceVariant,
-                        )
-                    }
+                    Text(
+                        if (expanded) "最近 ${lines.size} 条" else "最新",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = cs.onSurfaceVariant,
+                    )
                     lines.forEach {
                         Text(
                             it,
