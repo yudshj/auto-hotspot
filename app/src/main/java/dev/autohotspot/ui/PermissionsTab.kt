@@ -118,7 +118,7 @@ private fun PermissionsSection(state: MainUiState, actions: MainActions, modifie
                 },
                 status = when {
                     state.backgroundData -> PermStatus.Granted
-                    !state.autoOn -> PermStatus.Optional
+                    !state.enabled -> PermStatus.Optional
                     else -> PermStatus.Missing
                 },
                 actionLabel = "去设置",
@@ -169,7 +169,7 @@ private fun MethodsSection(state: MainUiState, actions: MainActions, modifier: M
                 title = "Shizuku",
                 description = when {
                     state.shizukuGranted -> "已授权 · 手机重启后需确保 Shizuku 再次启动"
-                    state.shizukuRunning -> "运行中，未授权" + if (state.autoOn) " · 自动打开热点需要它" else ""
+                    state.shizukuRunning -> "运行中，未授权" + if (state.enabled) " · 自动打开热点需要它" else ""
                     else -> "未运行 · 请打开 Shizuku 启动服务（每次重启手机后都需要）"
                 },
                 status = when {

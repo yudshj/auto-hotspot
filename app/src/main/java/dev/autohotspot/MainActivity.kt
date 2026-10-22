@@ -42,7 +42,10 @@ class MainActivity : ComponentActivity() {
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> refresh() }
     private val shizukuListener = Shizuku.OnRequestPermissionResultListener { _, _ -> refresh() }
-    private val binderListener = Shizuku.OnBinderReceivedListener { refresh() }
+    private val binderListener = Shizuku.OnBinderReceivedListener {
+        AutoHotspotApp.shareShizukuBinder(this)
+        refresh()
+    }
     private val binderDeadListener = Shizuku.OnBinderDeadListener { refresh() }
 
     /**
@@ -151,7 +154,7 @@ class MainActivity : ComponentActivity() {
         Shizuku.addBinderDeadListener(binderDeadListener)
         Notifier.ensureChannel(this) // 先建渠道，「去开启」才能跳到对应的渠道设置页
         // 打开界面时重新注册一次监听（幂等），防止注册因某些原因丢失
-        if (Prefs.isEnabled(this) || Prefs.isAutoOn(this)) WifiMonitor.sync(this)
+        if (Prefs.isEnabled(this)) WifiMonitor.sync(this)
         setContent {
             AutoHotspotTheme {
                 // 在这里直接读取 tick（快照状态），tick 一变本作用域就重组、重新读取所有状态。
@@ -164,6 +167,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // binder 由 :monitor 转过来；进程启动时没拿到（例如对方那时还没收到）就再要一次，到了会触发 binderListener
+        if (!HotspotController.shizukuRunning()) AutoHotspotApp.requestShizukuBinder(this)
         refresh()
     }
 
@@ -191,12 +196,12 @@ class MainActivity : ComponentActivity() {
             Prefs.setEnabled(this, it)
             WifiMonitor.sync(this)
         },
-        setAutoOn = {
-            Prefs.setAutoOn(this, it)
-            WifiMonitor.sync(this)
-        },
         setAnyWifi = { Prefs.setAnyWifi(this, it) },
         setStatusNotify = { Prefs.setStatusNotify(this, it) },
+        setRealtime = {
+            Prefs.setRealtime(this, it)
+            WifiMonitor.syncMonitor(this)
+        },
         requestStatusNotifications = {
             when {
                 !granted(Manifest.permission.POST_NOTIFICATIONS) ->
@@ -261,7 +266,6 @@ class MainActivity : ComponentActivity() {
         val fine = granted(Manifest.permission.ACCESS_FINE_LOCATION)
         val state = MainUiState(
             enabled = Prefs.isEnabled(this),
-            autoOn = Prefs.isAutoOn(this),
             anyWifi = Prefs.isAnyWifi(this),
             ssids = Prefs.ssids(this).sorted(),
             current = if (fine) currentSsid() else null,
@@ -273,6 +277,7 @@ class MainActivity : ComponentActivity() {
             batteryUnrestricted = getSystemService(android.os.PowerManager::class.java)
                 .isIgnoringBatteryOptimizations(packageName),
             statusNotify = Prefs.isStatusNotify(this),
+            realtime = Prefs.isRealtime(this),
             statusChannel = Notifier.statusChannelEnabled(this),
             backgroundData = getSystemService(ConnectivityManager::class.java).restrictBackgroundStatus !=
                 ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED,

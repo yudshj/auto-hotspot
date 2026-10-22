@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Info
@@ -50,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
@@ -132,22 +134,20 @@ private fun MainUiState.networkInfo(): NetworkInfo = when (network) {
 
 private enum class SummaryTone { Good, Neutral, Warn }
 
-/** 状态卡片底部的一句话总结：结合当前网络、热点状态与两项自动化 */
+/** 状态卡片底部的一句话总结：结合当前网络、热点状态与自动化开关 */
 private fun MainUiState.summary(): Pair<SummaryTone, String> {
     if (hotspot == HotspotState.Starting) return SummaryTone.Neutral to "热点启动中，通常需要几秒…"
     if (hotspot == HotspotState.Stopping) return SummaryTone.Neutral to "热点关闭中…"
-    if (!enabled && !autoOn) return SummaryTone.Neutral to "两项自动化都已关闭，热点不会被自动控制"
+    if (!enabled) return SummaryTone.Neutral to "自动开关热点已关闭，热点不会被自动控制"
     return when (network) {
         NetworkKind.Wifi -> when {
             !anyWifi && current == null -> SummaryTone.Neutral to "无法识别 Wi-Fi 名称，暂时不会自动关闭热点"
             !currentMatches -> SummaryTone.Neutral to "「$current」不在列表中，热点不受影响"
-            !enabled -> SummaryTone.Neutral to "在「${current ?: "Wi-Fi"}」，但连接时关闭热点已停用"
             hotspotOn -> SummaryTone.Warn to "在「${current ?: "Wi-Fi"}」但热点仍开启，请检查关闭热点的方式"
             anyWifi -> SummaryTone.Good to "在任意 Wi-Fi，热点保持关闭"
             else -> SummaryTone.Good to "在「${current ?: "Wi-Fi"}」，热点保持关闭"
         }
         NetworkKind.Cellular -> when {
-            !autoOn -> SummaryTone.Neutral to "使用移动数据中，自动打开热点已停用"
             hotspotOn -> SummaryTone.Good to "使用移动数据中，热点已开启"
             else -> SummaryTone.Neutral to "使用移动数据中；下次从 Wi-Fi 切到移动数据时会自动打开热点"
         }
@@ -159,7 +159,7 @@ private fun MainUiState.summary(): Pair<SummaryTone, String> {
 @Composable
 private fun StatusCard(state: MainUiState, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    val active = state.enabled || state.autoOn
+    val active = state.enabled
     val net = state.networkInfo()
     val (tone, summary) = state.summary()
 
@@ -392,15 +392,19 @@ private fun AutomationItem(
     description: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
+    val on = checked && enabled
     ListItem(
-        modifier = Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
+        modifier = Modifier
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange)
+            .alpha(if (enabled) 1f else 0.5f),
         leadingContent = {
             IconBadge(
                 icon,
-                container = if (checked) cs.primary else cs.surfaceContainerHighest,
-                content = if (checked) cs.onPrimary else cs.onSurfaceVariant,
+                container = if (on) cs.primary else cs.surfaceContainerHighest,
+                content = if (on) cs.onPrimary else cs.onSurfaceVariant,
             )
         },
         headlineContent = { Text(title) },
@@ -412,27 +416,33 @@ private fun AutomationItem(
 
 @Composable
 private fun AutomationSection(state: MainUiState, actions: MainActions, modifier: Modifier = Modifier) {
-    val switches = listOf(state.enabled, state.autoOn, state.statusNotify)
-    Section("自动化", modifier, trailing = "已开启 ${switches.count { it }}/${switches.size}") {
+    val switches = listOf(state.enabled, state.realtime, state.statusNotify)
+    // 总开关关着时子选项不生效，不计数
+    val trailing = if (state.enabled) "已开启 ${switches.count { it }}/${switches.size}" else "已关闭"
+    Section("自动化", modifier, trailing = trailing) {
         SectionCard {
             AutomationItem(
-                icon = Icons.Rounded.WifiTetheringOff,
-                title = if (state.anyWifi) "连接到任意 Wi-Fi 时关闭热点" else "连接到列表中的 Wi-Fi 时关闭热点",
-                description = if (state.anyWifi) "已在「Wi-Fi」栏开启「任意 Wi-Fi」，连上任何网络即关闭热点"
-                else "连上「Wi-Fi」栏列表中任一网络即关闭热点",
+                icon = Icons.Rounded.WifiTethering,
+                title = "自动开关热点",
+                description = "断开 Wi-Fi、改用移动数据时打开热点；" +
+                    (if (state.anyWifi) "连上任何 Wi-Fi 时关闭" else "连上「Wi-Fi」栏列表中的网络时关闭") +
+                    "。在移动数据下手动关掉热点后不会再次打开",
                 checked = state.enabled,
                 onCheckedChange = actions.setEnabled,
             )
             CardDivider()
             AutomationItem(
-                icon = Icons.Rounded.WifiTethering,
-                title = "断开 Wi-Fi 后自动打开热点",
-                description = "从 Wi-Fi 切换到移动数据时打开热点；在移动数据下手动关闭热点后不会再次打开",
-                checked = state.autoOn,
-                onCheckedChange = actions.setAutoOn,
+                enabled = state.enabled,
+                icon = Icons.Rounded.Bolt,
+                title = "实时监听",
+                description = "常驻一条静默通知，Wi-Fi 一变就立即处理；关掉后靠系统事件和定时检查，" +
+                    "连着没有互联网的 Wi-Fi、或流量关着时换 Wi-Fi，可能晚几分钟",
+                checked = state.realtime,
+                onCheckedChange = actions.setRealtime,
             )
             CardDivider()
             AutomationItem(
+                enabled = state.enabled,
                 icon = Icons.Rounded.NotificationsActive,
                 title = "开关热点时发通知",
                 description = "自动打开/关闭热点时在通知栏显示进度和结果（无声），可据此确认后台仍在工作",

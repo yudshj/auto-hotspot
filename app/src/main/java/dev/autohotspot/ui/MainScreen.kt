@@ -63,8 +63,8 @@ enum class NetworkKind { Wifi, Cellular, Other, None }
 /** 界面所需的全部状态；由 MainActivity 在每次 tick 时重新读取 */
 @Immutable
 data class MainUiState(
+    /** 「自动开关热点」总开关 */
     val enabled: Boolean,
-    val autoOn: Boolean,
     /** 不按列表过滤：连上任意 Wi-Fi 都关闭热点 */
     val anyWifi: Boolean,
     val ssids: List<String>,
@@ -81,6 +81,8 @@ data class MainUiState(
     val backgroundData: Boolean,
     /** 「开关热点时发通知」开关 */
     val statusNotify: Boolean,
+    /** 「实时监听」开关（常驻服务 + 常驻通知） */
+    val realtime: Boolean,
     /** 「热点状态」通知渠道可用（应用通知总开关 + 渠道都开着） */
     val statusChannel: Boolean,
     /** 电池「不受限制」（已加入电池优化白名单）。推荐但非必需，可降低后台任务被推迟的概率 */
@@ -96,14 +98,14 @@ data class MainUiState(
     /** 读取 SSID 才需要位置权限；「任意 Wi-Fi」模式不看 SSID，位置权限变为可选 */
     val locationRequired get() = !anyWifi
     /** 自动打开热点只能走 Shizuku（「修改系统设置」只能关不能开） */
-    val shizukuRequired get() = autoOn && !shizukuGranted
+    val shizukuRequired get() = enabled && !shizukuGranted
     /** 「控制热点的方式」有缺失：一种都没有，或开了自动打开却没有 Shizuku */
     val methodMissing get() = !anyStopMethod || shizukuRequired
     val basicMissing get() = listOf(
         fineLocation || !locationRequired,
         backgroundLocation || !locationRequired,
         notifications,
-        backgroundData || !autoOn,
+        backgroundData || !enabled,
     ).count { !it }
     val needsAttention get() = basicMissing > 0 || methodMissing
     val currentInList get() = current != null && current in ssids
@@ -120,9 +122,9 @@ data class MainUiState(
 
 class MainActions(
     val setEnabled: (Boolean) -> Unit,
-    val setAutoOn: (Boolean) -> Unit,
     val setAnyWifi: (Boolean) -> Unit,
     val setStatusNotify: (Boolean) -> Unit,
+    val setRealtime: (Boolean) -> Unit,
     val requestStatusNotifications: () -> Unit,
     val addSsid: (String) -> Unit,
     val removeSsid: (String) -> Unit,

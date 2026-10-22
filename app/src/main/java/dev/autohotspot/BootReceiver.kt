@@ -7,8 +7,10 @@ import android.content.Intent
 /** 开机 / 应用更新后恢复监控（系统事件注册在重启或更新后会失效） */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (!Prefs.isEnabled(context) && !Prefs.isAutoOn(context)) return
         val boot = intent.action == Intent.ACTION_BOOT_COMPLETED
+        // 开机算重新开始：上次记下的连接 / 没处理完的断开都作废
+        if (boot) WifiMonitor.onBoot(context)
+        if (!Prefs.isEnabled(context)) return
         runCatching { WifiMonitor.sync(context) }
             .onSuccess { if (boot) Prefs.appendLog(context, "开机：已恢复监控") }
             .onFailure { Prefs.appendLog(context, "注册监听失败：${it.message}") }

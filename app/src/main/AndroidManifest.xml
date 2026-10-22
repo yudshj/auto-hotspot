@@ -10,11 +10,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission
         android:name="android.permission.WRITE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
 
     <application
+        android:name=".AutoHotspotApp"
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
@@ -35,6 +39,21 @@
             android:name=".WifiEventReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".CheckReceiver"
+            android:exported="false" />
+
+        <!-- 实时监听：独立进程，只监听网络变化，不碰 Shizuku（见 MonitorService 注释） -->
+        <service
+            android:name=".MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":monitor">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Watches Wi-Fi and default-network changes so the hotspot can be turned on/off as soon as Wi-Fi connects or disconnects" />
+        </service>
+
         <service
             android:name=".MonitorJobService"
             android:exported="false"
@@ -49,8 +68,11 @@
             </intent-filter>
         </receiver>
 
+        <!-- 放在常驻的 :monitor 进程：实时监听让 uid 一直活跃，Shizuku 不会再给新拉起的主进程推 binder，
+             由这里接收并转给主进程（见 AutoHotspotApp） -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
+            android:process=":monitor"
             android:authorities="${applicationId}.shizuku"
             android:enabled="true"
             android:exported="true"

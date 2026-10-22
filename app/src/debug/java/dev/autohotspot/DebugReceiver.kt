@@ -21,9 +21,13 @@ class DebugReceiver : BroadcastReceiver() {
                     "tmstop" -> HotspotController.stopViaTetheringManager(context)
                     "enable" -> { Prefs.setEnabled(context, true); WifiMonitor.sync(context); "enabled" }
                     "disable" -> { Prefs.setEnabled(context, false); WifiMonitor.sync(context); "disabled" }
-                    "autoon" -> {
-                        Prefs.setAutoOn(context, intent.getBooleanExtra("v", true)); WifiMonitor.sync(context)
-                        "autoOn=${Prefs.isAutoOn(context)}"
+                    "addssid" -> {
+                        Prefs.addSsid(context, intent.getStringExtra("ssid").orEmpty())
+                        "ssids=${Prefs.ssids(context)}"
+                    }
+                    "realtime" -> {
+                        Prefs.setRealtime(context, intent.getBooleanExtra("v", true)); WifiMonitor.syncMonitor(context)
+                        "realtime=${Prefs.isRealtime(context)}"
                     }
                     else -> ""
                 } + " | hotspot=${HotspotController.isHotspotEnabled(context)}" +

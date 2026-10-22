@@ -10,16 +10,16 @@ object Prefs {
     private const val NAME = "auto_hotspot"
     const val KEY_ENABLED = "enabled"
     const val KEY_SSIDS = "ssids"
-    const val KEY_AUTO_ON = "auto_on"
     const val KEY_ANY_WIFI = "any_wifi"
     const val KEY_STATUS_NOTIFY = "status_notify"
+    const val KEY_REALTIME = "realtime"
     const val KEY_LOG = "log"
     private const val MAX_LOG = 100
 
     fun sp(c: Context): SharedPreferences =
         c.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
-    /** 「连接 Wi-Fi 时关闭热点」，默认开启 */
+    /** 「自动开关热点」总开关：断开 Wi-Fi 时打开热点，连上（任意 / 列表中的）Wi-Fi 时关闭。默认开启 */
     fun isEnabled(c: Context) = sp(c).getBoolean(KEY_ENABLED, true)
     fun setEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_ENABLED, v).apply()
 
@@ -27,9 +27,9 @@ object Prefs {
     fun isAnyWifi(c: Context) = sp(c).getBoolean(KEY_ANY_WIFI, true)
     fun setAnyWifi(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_ANY_WIFI, v).apply()
 
-    /** 断开 Wi-Fi、改用移动数据时自动打开热点 */
-    fun isAutoOn(c: Context) = sp(c).getBoolean(KEY_AUTO_ON, false)
-    fun setAutoOn(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_AUTO_ON, v).apply()
+    /** 实时监听（常驻服务 + 常驻通知），默认开启 */
+    fun isRealtime(c: Context) = sp(c).getBoolean(KEY_REALTIME, true)
+    fun setRealtime(c: Context, v: Boolean) = sp(c).edit().putBoolean(KEY_REALTIME, v).apply()
 
     /** 自动开/关热点时发状态通知 */
     fun isStatusNotify(c: Context) = sp(c).getBoolean(KEY_STATUS_NOTIFY, true)

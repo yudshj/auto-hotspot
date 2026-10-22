@@ -1,15 +1,18 @@
 package dev.autohotspot
 
 import dev.autohotspot.DisconnectPolicy.Debounce
-import dev.autohotspot.DisconnectPolicy.Periodic
 import dev.autohotspot.DisconnectPolicy.Snapshot
+import dev.autohotspot.DisconnectPolicy.Watch
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DisconnectPolicyTest {
-    private val onCellular = Snapshot(hasWifiNetwork = false, defaultIsCellular = true)
-    private val onWifi = Snapshot(hasWifiNetwork = true, defaultIsCellular = false, ssid = "DeepSeek")
-    private val noNetwork = Snapshot(hasWifiNetwork = false, defaultIsCellular = false)
+    private val home = 101L
+    private val onCellular = Snapshot(wifiNetwork = null, defaultIsCellular = true)
+    private val onWifi = Snapshot(wifiNetwork = home, defaultIsCellular = false, ssid = "DeepSeek")
+    private val noNetwork = Snapshot(wifiNetwork = null, defaultIsCellular = false)
 
     /**
      * 回归：AP 主动断开（DISASSOC_AP_BUSY）后系统立刻自动重连，防抖结束时还在握手。
@@ -17,7 +20,7 @@ class DisconnectPolicyTest {
      */
     @Test
     fun reconnectHandshakeInProgress_isTreatedAsDisconnected() {
-        val handshaking = Snapshot(hasWifiNetwork = false, defaultIsCellular = true, ssid = "DeepSeek")
+        val handshaking = Snapshot(wifiNetwork = null, defaultIsCellular = true, ssid = "DeepSeek")
         assertEquals(Debounce.HANDLE, DisconnectPolicy.afterDebounce(handshaking))
     }
 
@@ -38,28 +41,39 @@ class DisconnectPolicyTest {
         assertEquals(Debounce.NOT_CELLULAR, DisconnectPolicy.afterDebounce(noNetwork))
     }
 
-    /** 回归：断开事件被漏掉后，周期兜底要补处理，而不是只重新注册 Wi-Fi 监听 */
+    /** 回归：断开事件被漏掉后，检查时要补处理 */
     @Test
-    fun periodic_missedDisconnectOnCellular_isHandled() {
-        assertEquals(Periodic.HANDLE_MISSED_DISCONNECT, DisconnectPolicy.periodic(onCellular, pendingDisconnect = true))
-        val handshaking = onCellular.copy(ssid = "DeepSeek")
-        assertEquals(Periodic.HANDLE_MISSED_DISCONNECT, DisconnectPolicy.periodic(handshaking, pendingDisconnect = true))
-    }
-
-    /** 断开已处理过（例如之后在流量下手动关了热点），周期兜底不能再次打开 */
-    @Test
-    fun periodic_disconnectAlreadyHandled_onlyArmsListener() {
-        assertEquals(Periodic.ARM_WIFI_LISTENER, DisconnectPolicy.periodic(onCellular, pendingDisconnect = false))
+    fun missedDisconnect_onlyWhenPendingAndOnCellular() {
+        assertTrue(DisconnectPolicy.missedDisconnect(onCellular, pendingDisconnect = true))
+        assertTrue(DisconnectPolicy.missedDisconnect(onCellular.copy(ssid = "DeepSeek"), pendingDisconnect = true))
+        // 已处理过（例如之后在流量下手动关了热点）：不能再次打开
+        assertFalse(DisconnectPolicy.missedDisconnect(onCellular, pendingDisconnect = false))
+        assertFalse(DisconnectPolicy.missedDisconnect(noNetwork, pendingDisconnect = true))
+        assertFalse(DisconnectPolicy.missedDisconnect(onWifi, pendingDisconnect = true))
     }
 
     @Test
-    fun periodic_pendingButNoCellular_waits() {
-        assertEquals(Periodic.ARM_WIFI_LISTENER, DisconnectPolicy.periodic(noNetwork, pendingDisconnect = true))
+    fun nextWatch_noWifi_armsListener_andWaitsForCellularIfPending() {
+        assertEquals(Watch.ARM_WIFI_LISTENER, DisconnectPolicy.nextWatch(onCellular, home, pendingDisconnect = false))
+        assertEquals(
+            Watch.ARM_WIFI_LISTENER_AND_WAIT_FOR_CELLULAR,
+            DisconnectPolicy.nextWatch(noNetwork, home, pendingDisconnect = true),
+        )
     }
 
     @Test
-    fun periodic_onWifi_waitsForCellular() {
-        assertEquals(Periodic.WAIT_FOR_CELLULAR, DisconnectPolicy.periodic(onWifi, pendingDisconnect = true))
-        assertEquals(Periodic.WAIT_FOR_CELLULAR, DisconnectPolicy.periodic(onWifi, pendingDisconnect = false))
+    fun nextWatch_unhandledWifi_armsListenerToGetItDelivered() {
+        assertEquals(Watch.ARM_WIFI_LISTENER, DisconnectPolicy.nextWatch(onWifi, handledWifi = 99, pendingDisconnect = true))
+    }
+
+    @Test
+    fun nextWatch_handledWifi_waitsForCellular() {
+        assertEquals(Watch.WAIT_FOR_CELLULAR, DisconnectPolicy.nextWatch(onWifi, home, pendingDisconnect = true))
+    }
+
+    /** 回归：连着没有互联网的 Wi-Fi（默认网络仍是移动数据）时不能靠「等移动数据」任务，否则每 5 秒空转 */
+    @Test
+    fun nextWatch_handledWifiNotDefault_rechecksLater() {
+        assertEquals(Watch.RECHECK, DisconnectPolicy.nextWatch(onWifi.copy(defaultIsCellular = true), home, pendingDisconnect = true))
     }
 }

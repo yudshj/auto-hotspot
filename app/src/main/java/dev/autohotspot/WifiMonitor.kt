@@ -18,10 +18,14 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
+import android.os.PowerManager
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlin.concurrent.thread
 
 /**
- * 监控方式（没有常驻服务，全部由系统事件唤醒）：
+ * 监控方式。默认还有一个「实时监听」常驻服务（[MonitorService]，独立进程）：网络一变就让主进程检查一次（[CheckReceiver]），
+ * 下面这套由系统事件唤醒的机制照常保留，作为实时监听被关掉 / 被停止时的后备：
  *
  * 1. 「Wi-Fi 连上」：ConnectivityManager.registerNetworkCallback(request, PendingIntent)。
  *    注意：系统每投递一次 PendingIntent，约 5 秒后就会自动释放这条注册
@@ -37,18 +41,24 @@ import kotlin.concurrent.thread
  * 另有一个 15 分钟的周期任务兜底（例如 Wi-Fi 断开时没有移动网络，蜂窝任务就不会运行），
  * 发现有没处理的断开时会补做一次断开处理。
  *
- * 不用常驻前台服务的原因：Shizuku 服务端只在应用 uid「启动/从缓存恢复」时推送 binder，
- * 常驻前台服务会让 uid 一直处于活跃状态，Shizuku 晚于本应用启动（如开机）时就永远收不到 binder。
+ * 连着没有互联网的 Wi-Fi 时（未验证，默认网络仍是移动数据），「等移动数据」任务会立即运行，
+ * 这时改成每分钟检查一次（JOB_RECHECK），否则会每 5 秒空转一次。
+ *
+ * 流程本身（何时开/关热点、何时安排哪种唤醒）在 [AutoHotspotCore]，这里只提供 Android 实现。
+ *
+ * Shizuku binder：服务端只在它启动、或 uid 从不活跃变成活跃时推送。常驻服务让 uid 一直活跃，
+ * 所以 binder 推给常驻的 `:monitor`（ShizukuProvider 在那里），主进程按需向它要，见 [AutoHotspotApp]。
  */
 object WifiMonitor {
     private const val ALERT_CHANNEL_ID = "alerts"
     private const val ALERT_NOTIF_ID = 2
     private const val KEY_LAST_SSID = "last_ssid"
+    private const val KEY_HANDLED_WIFI = "handled_wifi"
     const val JOB_WAIT_CELLULAR = 1
     const val JOB_PERIODIC = 2
-    private val disconnectLock = Any()
+    const val JOB_RECHECK = 3
 
-    fun isActive(c: Context) = Prefs.isEnabled(c) || Prefs.isAutoOn(c)
+    fun isActive(c: Context) = Prefs.isEnabled(c)
 
     private fun pendingIntent(c: Context): PendingIntent = PendingIntent.getBroadcast(
         c, 0, Intent(c, WifiEventReceiver::class.java),
@@ -56,18 +66,27 @@ object WifiMonitor {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
     )
 
+    /**
+     * 「连着 Wi-Fi」的唯一判定：PendingIntent 监听、实时监听、快照都用这个请求（默认还要求 INTERNET 等能力）。
+     * 开热点时系统会建一个只有 LOCAL_NETWORK、没有 INTERNET 能力的 Wi-Fi 网络（ap_br_wlan*），
+     * 只看传输类型的话会把它当成「连上了 Wi-Fi」，刚开的热点随即被关掉（真机上出现过）。
+     */
+    fun wifiRequest(): NetworkRequest =
+        NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
+
+    private fun isWifiClient(cm: ConnectivityManager, network: Network) =
+        cm.getNetworkCapabilities(network)?.let { wifiRequest().canBeSatisfiedBy(it) } == true
+
     /** 注册「Wi-Fi 可用」监听。若此刻已连着 Wi-Fi，系统会立即投递一次（相当于做一次检查）。 */
     private fun armWifiListener(c: Context) {
-        c.getSystemService(ConnectivityManager::class.java).registerNetworkCallback(
-            NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(),
-            pendingIntent(c)
-        )
+        c.getSystemService(ConnectivityManager::class.java).registerNetworkCallback(wifiRequest(), pendingIntent(c))
     }
 
     /** 按开关状态启用/停用监控（开关切换、开机、应用更新、打开界面时调用） */
     fun sync(c: Context) {
         val ctx = c.applicationContext
         val js = ctx.getSystemService(JobScheduler::class.java)
+        syncMonitor(ctx)
         if (isActive(ctx)) {
             // 同一个 PendingIntent 重复注册会替换旧注册，不会重复
             armWifiListener(ctx)
@@ -83,6 +102,22 @@ object WifiMonitor {
             runCatching { ctx.getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(pendingIntent(ctx)) }
             js.cancel(JOB_WAIT_CELLULAR)
             js.cancel(JOB_PERIODIC)
+            js.cancel(JOB_RECHECK)
+        }
+    }
+
+    /**
+     * 按开关启动/停止实时监听。后台启动前台服务只在特定场合允许（开机、应用更新、界面在前台、在电池白名单里），
+     * 不允许时抛异常；[quiet] = 周期任务里顺手尝试拉起，失败不记日志。
+     */
+    fun syncMonitor(c: Context, quiet: Boolean = false) {
+        val ctx = c.applicationContext
+        val intent = Intent(ctx, MonitorService::class.java)
+        if (isActive(ctx) && Prefs.isRealtime(ctx)) {
+            runCatching { ctx.startForegroundService(intent) }
+                .onFailure { if (!quiet) Prefs.appendLog(ctx, "无法启动实时监听：${it.message}") }
+        } else {
+            ctx.stopService(intent)
         }
     }
 
@@ -102,28 +137,25 @@ object WifiMonitor {
         if (ok != JobScheduler.RESULT_SUCCESS) js.schedule(builder.setExpedited(false).build())
     }
 
-    private fun snapshot(c: Context): DisconnectPolicy.Snapshot {
-        val cm = c.getSystemService(ConnectivityManager::class.java)
-        @Suppress("DEPRECATION")
-        val hasWifi = cm.allNetworks.any {
-            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        }
-        val defaultCaps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
-        return DisconnectPolicy.Snapshot(
-            hasWifiNetwork = hasWifi,
-            defaultIsCellular = defaultCaps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true,
-            ssid = currentSsid(c),
+    /** 过一会儿再检查一次（连着不是默认网络的 Wi-Fi 时用来发现它断开） */
+    private fun scheduleRecheck(c: Context, delayMs: Long) {
+        c.getSystemService(JobScheduler::class.java).schedule(
+            JobInfo.Builder(JOB_RECHECK, ComponentName(c, MonitorJobService::class.java))
+                .setMinimumLatency(delayMs)
+                .build()
         )
     }
 
-    private fun secs(t0: Long) = "%.1f".format((System.currentTimeMillis() - t0) / 1000.0)
-
-    private fun waitForShizuku() {
-        // 刚被拉起时 Shizuku 的 binder 是异步送达的，等一会儿
-        val deadline = System.currentTimeMillis() + 8000
-        while (!HotspotController.shizukuRunning() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(200)
-        }
+    private fun snapshot(c: Context): DisconnectPolicy.Snapshot {
+        val cm = c.getSystemService(ConnectivityManager::class.java)
+        @Suppress("DEPRECATION")
+        val wifi = cm.allNetworks.firstOrNull { isWifiClient(cm, it) }
+        val defaultCaps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+        return DisconnectPolicy.Snapshot(
+            wifiNetwork = wifi?.networkHandle,
+            defaultIsCellular = defaultCaps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true,
+            ssid = currentSsid(c),
+        )
     }
 
     fun currentSsid(c: Context, network: Network? = null): String? {
@@ -136,109 +168,78 @@ object WifiMonitor {
         return normalizeSsid(ctx.getSystemService(WifiManager::class.java).connectionInfo?.ssid)
     }
 
-    /**
-     * Wi-Fi 连上时调用：连着列表中的 Wi-Fi（或开了「任意 Wi-Fi」）且热点开着，就关掉热点。
-     * 会阻塞，不要在主线程调用。
-     */
+    @Volatile
+    private var core: AutoHotspotCore? = null
+
+    /** 进程内唯一的流程实例（里面的锁要跨任务共享） */
+    private fun core(c: Context): AutoHotspotCore =
+        core ?: synchronized(this) {
+            core ?: AutoHotspotCore(AndroidEnv(c.applicationContext)).also { core = it }
+        }
+
+    /** 开机时调用（在重新注册监听之前） */
+    fun onBoot(c: Context) = core(c).onBoot()
+
+    /** Wi-Fi 连上时调用。会阻塞，不要在主线程调用。 */
     fun onWifiAvailable(c: Context, network: Network?) {
-        val ctx = c.applicationContext
-        // 监听已被系统释放，靠「等移动数据」任务在 Wi-Fi 断开后重新注册
-        scheduleWaitForCellular(ctx)
-
-        val ssid = currentSsid(ctx, network)
-        val sp = Prefs.sp(ctx)
-        if (ssid != null && sp.getString(KEY_LAST_SSID, null) != ssid) {
-            Prefs.appendLog(ctx, "已连接 Wi-Fi：$ssid")
-        }
-        sp.edit().putString(KEY_LAST_SSID, ssid ?: "?").apply()
-
-        if (!Prefs.isEnabled(ctx)) return
-        // 「任意 Wi-Fi」模式不看 SSID（读不到名称时也照样关闭）
-        if (!Prefs.isAnyWifi(ctx) && (ssid == null || ssid !in Prefs.ssids(ctx))) return
-        if (!HotspotController.isHotspotEnabled(ctx)) return
-        val name = ssid ?: "Wi-Fi"
-        Notifier.progress(ctx, "正在关闭热点…", "已连接「$name」")
-        waitForShizuku()
-        val t0 = System.currentTimeMillis()
-        try {
-            val msg = HotspotController.stopHotspot(ctx)
-            Prefs.appendLog(ctx, "[连接 $name] → $msg")
-            Notifier.done(ctx, "热点已关闭", "已连接「$name」· 用时 ${secs(t0)} 秒")
-            ctx.getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIF_ID)
-        } catch (t: Throwable) {
-            Notifier.clear(ctx)
-            Prefs.appendLog(ctx, "[连接 $name] → 关闭失败：${t.message}")
-            notifyFailure(ctx, "已连接 $name，但无法自动关闭热点", t.message ?: t.toString())
-        }
+        val ssid = currentSsid(c, network)
+        runBlocking { core(c).onWifiAvailable(ssid, network?.networkHandle) }
     }
 
-    /**
-     * 默认网络变成移动网络时调用（Wi-Fi 刚断开）：开着「自动打开」就打开热点，然后重新注册 Wi-Fi 监听。
-     * 只响应「Wi-Fi → 移动数据」这个切换事件，所以在流量下手动关掉热点后不会被反复打开。
-     */
-    fun onCellularDefault(c: Context) {
-        val ctx = c.applicationContext
-        try {
-            // 「等移动数据」任务和周期兜底可能同时进来：串行处理，后进来的会发现断开已处理过
-            synchronized(disconnectLock) {
-                val sp = Prefs.sp(ctx)
-                // 「?」表示连着 Wi-Fi 但读不到名称（如没有位置权限）
-                val last = sp.getString(KEY_LAST_SSID, null)?.let { if (it == "?") "Wi-Fi" else it } ?: return
-                // 防抖：Wi-Fi 漫游/短暂掉线时不动作
-                Thread.sleep(5000)
-                val s = snapshot(ctx)
-                when (DisconnectPolicy.afterDebounce(s)) {
-                    DisconnectPolicy.Debounce.WIFI_BACK -> {
-                        Prefs.appendLog(ctx, "Wi-Fi 短暂断开后已恢复（$last），不动作")
-                        return
-                    }
-                    DisconnectPolicy.Debounce.NOT_CELLULAR -> {
-                        // 保留 last：之后默认网络变成移动数据时由周期兜底补处理
-                        Prefs.appendLog(ctx, "已断开 Wi-Fi：$last，但默认网络不是移动数据，稍后再检查")
-                        return
-                    }
-                    DisconnectPolicy.Debounce.HANDLE -> {}
-                }
-                sp.edit().remove(KEY_LAST_SSID).apply()
-                val retrying = s.ssid?.let { "（系统仍在尝试连接 $it）" } ?: ""
-                Prefs.appendLog(ctx, "已断开 Wi-Fi：$last，改用移动数据$retrying")
-                if (!Prefs.isAutoOn(ctx) || HotspotController.isHotspotEnabled(ctx)) return
-                Notifier.progress(ctx, "正在打开热点…", "已断开「$last」，改用移动数据")
-                waitForShizuku()
-                val t0 = System.currentTimeMillis()
-                try {
-                    val msg = HotspotController.startHotspot(ctx)
-                    Prefs.appendLog(ctx, "[改用移动数据] → $msg")
-                    Notifier.done(ctx, "热点已开启", "已断开「$last」，改用移动数据 · 用时 ${secs(t0)} 秒")
-                    ctx.getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIF_ID)
-                } catch (t: Throwable) {
-                    Notifier.clear(ctx)
-                    Prefs.appendLog(ctx, "[改用移动数据] → 打开热点失败：${t.message}")
-                    notifyFailure(ctx, "已断开 $last，但无法自动打开热点", t.message ?: t.toString())
-                }
-            }
-        } finally {
-            // 若 Wi-Fi 在防抖期间又连上了，注册时系统会立即投递，流程照常继续
-            if (isActive(ctx)) armWifiListener(ctx)
-        }
-    }
+    /** 默认网络变成移动网络时调用（Wi-Fi 刚断开）。会阻塞。 */
+    fun onCellularDefault(c: Context) = runBlocking { core(c).onCellularDefault() }
 
-    /**
-     * 周期兜底：连着 Wi-Fi 就确保「等移动数据」任务在；没连 Wi-Fi 就确保 Wi-Fi 监听在，
-     * 若还有没处理的断开（例如断开时系统正在自动重连，防抖检查没通过）且已在用移动数据，就补做断开处理。
-     */
-    fun onPeriodic(c: Context) {
-        val ctx = c.applicationContext
-        if (!isActive(ctx)) return
-        val last = Prefs.sp(ctx).getString(KEY_LAST_SSID, null)
-        when (DisconnectPolicy.periodic(snapshot(ctx), pendingDisconnect = last != null)) {
-            DisconnectPolicy.Periodic.WAIT_FOR_CELLULAR -> scheduleWaitForCellular(ctx)
-            DisconnectPolicy.Periodic.HANDLE_MISSED_DISCONNECT -> {
-                Prefs.appendLog(ctx, "周期检查：发现未处理的 Wi-Fi 断开（${if (last == "?") "Wi-Fi" else last}）")
-                onCellularDefault(ctx) // 结束时会重新注册 Wi-Fi 监听
+    /** 周期兜底 / 定时检查 / 实时监听通知网络变了（[realtime]）。会阻塞。 */
+    fun onCheck(c: Context, realtime: Boolean = false) = runBlocking { core(c).onCheck(realtime) }
+
+    private class AndroidEnv(private val ctx: Context) : AutoHotspotCore.Env {
+        override val enabled get() = Prefs.isEnabled(ctx)
+        override val anyWifi get() = Prefs.isAnyWifi(ctx)
+        override val ssids get() = Prefs.ssids(ctx)
+
+        override var lastSsid: String?
+            get() = Prefs.sp(ctx).getString(KEY_LAST_SSID, null)
+            set(v) {
+                Prefs.sp(ctx).edit().apply { if (v == null) remove(KEY_LAST_SSID) else putString(KEY_LAST_SSID, v) }.apply()
             }
-            DisconnectPolicy.Periodic.ARM_WIFI_LISTENER -> armWifiListener(ctx)
+
+        override var handledWifi: Long?
+            get() = Prefs.sp(ctx).let { if (it.contains(KEY_HANDLED_WIFI)) it.getLong(KEY_HANDLED_WIFI, 0) else null }
+            set(v) {
+                Prefs.sp(ctx).edit().apply { if (v == null) remove(KEY_HANDLED_WIFI) else putLong(KEY_HANDLED_WIFI, v) }.apply()
+            }
+
+        override fun snapshot() = snapshot(ctx)
+
+        override fun wifiConnected(network: Long): Boolean {
+            val cm = ctx.getSystemService(ConnectivityManager::class.java)
+            @Suppress("DEPRECATION")
+            return cm.allNetworks.any { it.networkHandle == network && isWifiClient(cm, it) }
         }
+        override fun hotspotOn() = HotspotController.isHotspotEnabled(ctx)
+        override suspend fun startHotspot() = HotspotController.startHotspot(ctx)
+        override suspend fun stopHotspot() = HotspotController.stopHotspot(ctx)
+
+        override suspend fun waitForShizuku() {
+            // binder 由 :monitor 里的 ShizukuProvider 转过来（见 AutoHotspotApp）；进程启动时已经要过一次，没拿到就再要
+            if (!HotspotController.shizukuRunning()) AutoHotspotApp.requestShizukuBinder(ctx)
+            val deadline = System.currentTimeMillis() + 8000
+            while (!HotspotController.shizukuRunning() && System.currentTimeMillis() < deadline) {
+                delay(200)
+            }
+            AutoHotspotApp.shareShizukuBinder(ctx)
+        }
+
+        override fun scheduleWaitForCellular() = scheduleWaitForCellular(ctx)
+        override fun armWifiListener() = armWifiListener(ctx)
+        override fun scheduleRecheck(delayMs: Long) = scheduleRecheck(ctx, delayMs)
+        override fun now() = System.currentTimeMillis()
+        override fun log(msg: String) = Prefs.appendLog(ctx, msg)
+        override fun progress(title: String, text: String) = Notifier.progress(ctx, title, text)
+        override fun done(title: String, text: String) = Notifier.done(ctx, title, text)
+        override fun clearProgress() = Notifier.clear(ctx)
+        override fun failure(title: String, detail: String) = notifyFailure(ctx, title, detail)
+        override fun clearFailure() = ctx.getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIF_ID)
     }
 
     private fun notifyFailure(c: Context, title: String, detail: String) {
@@ -284,14 +285,19 @@ class WifiEventReceiver : BroadcastReceiver() {
     }
 }
 
-/** JobScheduler 任务：默认网络变成蜂窝（Wi-Fi 断开）/ 周期兜底 */
+/** JobScheduler 任务：默认网络变成蜂窝（Wi-Fi 断开）/ 周期兜底 / 定时检查 */
 class MonitorJobService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         thread {
             try {
                 when (params.jobId) {
                     WifiMonitor.JOB_WAIT_CELLULAR -> WifiMonitor.onCellularDefault(this)
-                    WifiMonitor.JOB_PERIODIC -> WifiMonitor.onPeriodic(this)
+                    WifiMonitor.JOB_PERIODIC -> {
+                        // 实时监听被停掉（例如用户在「活动应用」里停止）时顺手拉起来
+                        WifiMonitor.syncMonitor(this, quiet = true)
+                        WifiMonitor.onCheck(this)
+                    }
+                    WifiMonitor.JOB_RECHECK -> WifiMonitor.onCheck(this)
                 }
             } catch (t: Throwable) {
                 Prefs.appendLog(this, "处理后台任务出错：$t")
@@ -303,4 +309,28 @@ class MonitorJobService : JobService() {
     }
 
     override fun onStopJob(params: JobParameters) = false
+}
+
+/** 实时监听（[MonitorService]，另一个进程）通知网络变了：在主进程里检查一次 */
+class CheckReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (!WifiMonitor.isActive(context)) return
+        val pending = goAsync()
+        // 防抖要等 5 秒，期间别让设备睡下去
+        val wakeLock = context.getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AutoHotspot:check")
+            .apply { acquire(60_000) }
+        thread {
+            try {
+                // 实时监听进程（重新）启动时也会发来一次：若它刚重启、手里没有 Shizuku binder，从主进程回存一份
+                AutoHotspotApp.shareShizukuBinder(context)
+                WifiMonitor.onCheck(context, realtime = true)
+            } catch (t: Throwable) {
+                Prefs.appendLog(context, "处理网络变化出错：$t")
+            } finally {
+                if (wakeLock.isHeld) wakeLock.release()
+                pending.finish()
+            }
+        }
+    }
 }

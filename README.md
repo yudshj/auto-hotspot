@@ -9,15 +9,15 @@
 [![implementation: auto](https://img.shields.io/badge/implementation-auto-ede9fe?labelColor=ede9fe)](AI-DECLARATION.md)
 [![review: auto](https://img.shields.io/badge/review-auto-ede9fe?labelColor=ede9fe)](AI-DECLARATION.md)
 
-An Android app that automatically **turns off your Wi-Fi hotspot when you connect to selected Wi-Fi networks**, and (optionally) **turns it back on when you leave Wi-Fi and switch to mobile data**.
+An Android app that automatically **turns your Wi-Fi hotspot on when you leave Wi-Fi and switch to mobile data**, and **turns it off when you connect to Wi-Fi** (any Wi-Fi, or only the networks you list).
 
 Requirements: Android 12+ (tested on Android 17), with [Shizuku](https://shizuku.rikka.app/) installed and running.
 
 ## Features
 
 - **Wi-Fi list**: add the current Wi-Fi with one tap, type an SSID manually, or delete entries.
-- **Auto off** (on by default): connecting to a listed Wi-Fi turns the hotspot off. The "Any Wi-Fi" switch is on by default, in which case the list is ignored and connecting to any Wi-Fi turns the hotspot off; turn it off to match against the list.
-- **Auto on** (optional): switching from Wi-Fi to mobile data turns the hotspot on. It only reacts to the actual switch, so turning the hotspot off by hand while on mobile data won't turn it back on.
+- **Auto hotspot** (one master switch, on by default): leaving Wi-Fi and switching to mobile data turns the hotspot on; connecting to Wi-Fi turns it off. The "Any Wi-Fi" switch is on by default, in which case connecting to any Wi-Fi turns the hotspot off; turn it off to only react to the listed networks. If mobile data is off when Wi-Fi drops, the hotspot is turned on once mobile data comes back. It only acts at the moment of connecting / disconnecting, so turning the hotspot on or off by hand afterwards is never reverted.
+- **Real-time monitoring** (on by default): a foreground service in a separate process watches network changes so every case is handled within seconds; it shows a silent, minimum-priority notification. With it off, the app relies on system events and periodic checks, and a few cases can be handled minutes late.
 - **Status card**: current network (Wi-Fi name / mobile data + carrier), hotspot state including "starting…" / "stopping…", live updates.
 - **Status notifications** (silent, optional): "turning hotspot on/off…" when an automation fires, then "hotspot on/off" once confirmed, with the reason and elapsed time — a quick way to see that the background automation is alive.
 - **Checks & hints** for every required permission and setting, a failure notification (e.g. when Shizuku isn't running), and an in-app log.
