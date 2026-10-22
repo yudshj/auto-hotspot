@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val releaseKeystoreFile = providers.gradleProperty("AUTOHOTSPOT_KEYSTORE_FILE").orNull
+
 android {
     namespace = "dev.autohotspot"
     compileSdk = 36
@@ -15,10 +17,22 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        if (releaseKeystoreFile != null) {
+            create("release") {
+                storeFile = file(releaseKeystoreFile)
+                storeType = "pkcs12"
+                storePassword = providers.gradleProperty("AUTOHOTSPOT_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.gradleProperty("AUTOHOTSPOT_KEY_ALIAS").get()
+                keyPassword = providers.gradleProperty("AUTOHOTSPOT_KEY_PASSWORD").get()
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     buildFeatures { compose = true }

@@ -4,3 +4,8 @@ local.properties
 .idea/
 *.iml
 .kotlin/
+
+# Release signing (keystore lives outside the repo; see ~/.gradle/gradle.properties)
+*.jks
+*.keystore
+keystore.properties
